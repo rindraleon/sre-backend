@@ -6,7 +6,7 @@ import { NestFactory } from "@nestjs/core";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import type { NextFunction, Request, Response } from "express";
 import { AppModule } from "./app.module";
-import { FiltreErreursHttpSre } from "./commun/filtres/filtre-erreurs-http-sre";
+import { HttpErrorFilter } from "./common/filters/http-error.filter";
 
 async function demarrer() {
   const application = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -44,7 +44,7 @@ async function demarrer() {
       transformOptions: { enableImplicitConversion: true },
     }),
   );
-  application.useGlobalFilters(new FiltreErreursHttpSre());
+  application.useGlobalFilters(new HttpErrorFilter());
 
   const configurationSwagger = new DocumentBuilder()
     .setTitle("API SRE — Haute Matsiatra")
@@ -58,7 +58,10 @@ async function demarrer() {
     application,
     configurationSwagger,
   );
-  SwaggerModule.setup("docs", application, documentSwagger);
+  // Documentation interactive uniquement hors production.
+  if (configuration.get<string>("NODE_ENV", "development") !== "production") {
+    SwaggerModule.setup("docs", application, documentSwagger);
+  }
 
   application.enableShutdownHooks();
   await application.listen(port, "0.0.0.0");

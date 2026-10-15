@@ -3,14 +3,15 @@ import { APP_GUARD } from "@nestjs/core";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { TypeOrmModule } from "@nestjs/typeorm";
-import { AuthentificationModule } from "./authentification/authentification.module";
-import { ContribuablesModule } from "./contribuables/contribuables.module";
+import { AuthModule } from "./auth/auth.module";
+import { TaxpayersModule } from "./taxpayers/taxpayers.module";
 import { DocumentsModule } from "./documents/documents.module";
-import { SanteController } from "./sante/sante.controller";
+import { HealthController } from "./health/health.controller";
+import { NotificationsModule } from "./notifications/notifications.module";
 import { ObligationsModule } from "./obligations/obligations.module";
-import { PaiementsModule } from "./paiements/paiements.module";
-import { TypesImpotModule } from "./types-impot/types-impot.module";
-import { UtilisateursModule } from "./utilisateurs/utilisateurs.module";
+import { PaymentsModule } from "./payments/payments.module";
+import { TaxTypesModule } from "./tax-types/tax-types.module";
+import { UsersModule } from "./users/users.module";
 
 @Module({
   imports: [
@@ -47,15 +48,16 @@ import { UtilisateursModule } from "./utilisateurs/utilisateurs.module";
         };
       },
     }),
-    AuthentificationModule,
-    ContribuablesModule,
-    TypesImpotModule,
+    AuthModule,
+    TaxpayersModule,
+    TaxTypesModule,
     ObligationsModule,
-    PaiementsModule,
+    NotificationsModule,
+    PaymentsModule,
     DocumentsModule,
-    UtilisateursModule,
+    UsersModule,
   ],
-  controllers: [SanteController],
+  controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

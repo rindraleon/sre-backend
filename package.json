@@ -2,7 +2,7 @@
   "name": "sre-backend",
   "version": "1.0.0",
   "private": true,
-  "description": "API NestJS du portail SRE — Madagascar",
+  "description": "API NestJS du portail SRE \u2014 Madagascar",
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
@@ -12,9 +12,10 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main.js",
     "typecheck": "tsc --noEmit",
-    "migration:run": "typeorm-ts-node-commonjs -d src/base-de-donnees/data-source.ts migration:run",
-    "migration:revert": "typeorm-ts-node-commonjs -d src/base-de-donnees/data-source.ts migration:revert",
-    "migration:run:prod": "typeorm -d dist/base-de-donnees/data-source.js migration:run"
+    "migration:run": "typeorm-ts-node-commonjs -d src/database/data-source.ts migration:run",
+    "migration:revert": "typeorm-ts-node-commonjs -d src/database/data-source.ts migration:revert",
+    "migration:run:prod": "typeorm -d dist/database/data-source.js migration:run",
+    "test": "jest"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.7",
@@ -23,6 +24,7 @@
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.2.7",
+    "@nestjs/schedule": "^6.1.3",
     "@nestjs/swagger": "^11.4.7",
     "@nestjs/throttler": "^6.7.1",
     "@nestjs/typeorm": "^11.0.3",
@@ -31,6 +33,7 @@
     "class-validator": "^0.14.2",
     "dotenv": "^16.6.1",
     "helmet": "^8.1.0",
+    "nodemailer": "^7.0.13",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pdfkit": "^0.17.2",
@@ -48,12 +51,34 @@
     "@nestjs/cli": "^11.0.10",
     "@nestjs/schematics": "^11.0.9",
     "@types/express": "^5.0.3",
+    "@types/jest": "^29.5.14",
     "@types/node": "^22.16.0",
+    "@types/nodemailer": "^7.0.12",
     "@types/passport-jwt": "^4.0.1",
     "@types/pdfkit": "^0.17.6",
+    "jest": "^29.7.0",
     "prettier": "^3.6.2",
+    "ts-jest": "^29.4.14",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.9.2"
+  },
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": {
+      "^.+\\.ts$": [
+        "ts-jest",
+        {
+          "tsconfig": "<rootDir>/../tsconfig.json"
+        }
+      ]
+    },
+    "testEnvironment": "node"
   }
 }

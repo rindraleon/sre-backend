@@ -8,28 +8,28 @@ import {
 import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
 import { Repository } from "typeorm";
-import { ContribuableEntity } from "../base-de-donnees/entities/contribuable.entity";
-import { ObligationEntity } from "../base-de-donnees/entities/obligation.entity";
-import { TypeImpotEntity } from "../base-de-donnees/entities/type-impot.entity";
-import { StatutObligation } from "../base-de-donnees/enums";
-import { REGION_SRE } from "../base-de-donnees/region-sre";
-import { UtilisateurAuthentifie } from "../commun/interfaces/utilisateur-authentifie.interface";
-import { CreerObligationDto } from "./dto/creer-obligation.dto";
+import { TaxpayerEntity } from "../database/entities/taxpayer.entity";
+import { ObligationEntity } from "../database/entities/obligation.entity";
+import { TaxTypeEntity } from "../database/entities/tax-type.entity";
+import { ObligationStatus } from "../database/enums";
+import { SRE_REGION } from "../database/region";
+import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
+import { CreateObligationDto } from "./dto/create-obligation.dto";
 
 @Injectable()
 export class ObligationsService {
   constructor(
     @InjectRepository(ObligationEntity)
     private readonly obligations: Repository<ObligationEntity>,
-    @InjectRepository(ContribuableEntity)
-    private readonly contribuables: Repository<ContribuableEntity>,
-    @InjectRepository(TypeImpotEntity)
-    private readonly typesImpots: Repository<TypeImpotEntity>,
+    @InjectRepository(TaxpayerEntity)
+    private readonly contribuables: Repository<TaxpayerEntity>,
+    @InjectRepository(TaxTypeEntity)
+    private readonly typesImpots: Repository<TaxTypeEntity>,
   ) {}
 
   async listerPourClient(idContribuable: string) {
     const lignes = await this.obligations.find({
-      where: { contribuable: { id: idContribuable, region: REGION_SRE } },
+      where: { contribuable: { id: idContribuable, region: SRE_REGION } },
       relations: { contribuable: true, typeImpot: true },
       order: { echeance: "ASC", creeLe: "DESC" },
     });
@@ -38,16 +38,16 @@ export class ObligationsService {
 
   async listerPourAdministration() {
     const lignes = await this.obligations.find({
-      where: { contribuable: { region: REGION_SRE } },
+      where: { contribuable: { region: SRE_REGION } },
       relations: { contribuable: true, typeImpot: true },
       order: { creeLe: "DESC" },
     });
     return lignes.map((obligation) => this.vueObligation(obligation, true));
   }
 
-  async obtenirUne(id: string, utilisateur: UtilisateurAuthentifie) {
+  async obtenirUne(id: string, utilisateur: AuthenticatedUser) {
     const obligation = await this.obligations.findOne({
-      where: { id, contribuable: { region: REGION_SRE } },
+      where: { id, contribuable: { region: SRE_REGION } },
       relations: { contribuable: true, typeImpot: true },
     });
     if (!obligation) throw new NotFoundException("Obligation introuvable.");
@@ -60,7 +60,7 @@ export class ObligationsService {
     return this.vueObligation(obligation, utilisateur.role === "ADMIN");
   }
 
-  async creer(donnees: CreerObligationDto) {
+  async creer(donnees: CreateObligationDto) {
     const referenceFiscale =
       donnees.referenceFiscale?.trim() ||
       `OBL-${new Date().getFullYear()}-${randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase()}`;
@@ -70,7 +70,7 @@ export class ObligationsService {
     const [contribuable, typeImpot] = await Promise.all([
       this.contribuables.findOneBy({
         id: donnees.contribuableId,
-        region: REGION_SRE,
+        region: SRE_REGION,
       }),
       this.typesImpots.findOneBy({ id: donnees.typeImpotId, actif: true }),
     ]);
@@ -94,7 +94,7 @@ export class ObligationsService {
       montant: String(donnees.montant),
       devise: "MGA",
       echeance: donnees.echeance.slice(0, 10),
-      statut: StatutObligation.A_PAYER,
+      statut: ObligationStatus.A_PAYER,
     });
     return this.vueObligation(await this.obligations.save(obligation), true);
   }

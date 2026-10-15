@@ -7,51 +7,51 @@ import { ConfigService } from "@nestjs/config";
 import PDFDocument from "pdfkit";
 import { EntityManager, Repository } from "typeorm";
 import { InjectRepository } from "@nestjs/typeorm";
-import { ContribuableEntity } from "../base-de-donnees/entities/contribuable.entity";
-import { DocumentPaiementEntity } from "../base-de-donnees/entities/document-paiement.entity";
-import { PaiementEntity } from "../base-de-donnees/entities/paiement.entity";
-import { UtilisateurEntity } from "../base-de-donnees/entities/utilisateur.entity";
+import { TaxpayerEntity } from "../database/entities/taxpayer.entity";
+import { PaymentDocumentEntity } from "../database/entities/payment-document.entity";
+import { PaymentEntity } from "../database/entities/payment.entity";
+import { UserEntity } from "../database/entities/user.entity";
 import {
-  RoleCompte,
-  StatutDocument,
-  TypeDocumentPaiement,
-} from "../base-de-donnees/enums";
-import { REGION_SRE } from "../base-de-donnees/region-sre";
-import { UtilisateurAuthentifie } from "../commun/interfaces/utilisateur-authentifie.interface";
+  AccountRole,
+  DocumentStatus,
+  PaymentDocumentType,
+} from "../database/enums";
+import { SRE_REGION } from "../database/region";
+import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
 
 @Injectable()
 export class DocumentsService {
   constructor(
     private readonly configuration: ConfigService,
-    @InjectRepository(DocumentPaiementEntity)
-    private readonly documents: Repository<DocumentPaiementEntity>,
+    @InjectRepository(PaymentDocumentEntity)
+    private readonly documents: Repository<PaymentDocumentEntity>,
   ) {}
 
-  async creerAccuse(gestionnaire: EntityManager, paiement: PaiementEntity) {
+  async creerAccuse(gestionnaire: EntityManager, paiement: PaymentEntity) {
     return this.creerDocument(
       gestionnaire,
       paiement,
-      TypeDocumentPaiement.ACCUSE_DECLARATION,
+      PaymentDocumentType.ACCUSE_DECLARATION,
       null,
     );
   }
 
   async creerRecuInterne(
     gestionnaire: EntityManager,
-    paiement: PaiementEntity,
-    administrateur: UtilisateurEntity,
+    paiement: PaymentEntity,
+    administrateur: UserEntity,
   ) {
     return this.creerDocument(
       gestionnaire,
       paiement,
-      TypeDocumentPaiement.RECU_PAIEMENT,
+      PaymentDocumentType.RECU_PAIEMENT,
       administrateur,
     );
   }
 
   async listerMesDocuments(idContribuable: string) {
     const documents = await this.documents.find({
-      where: { contribuable: { id: idContribuable, region: REGION_SRE } },
+      where: { contribuable: { id: idContribuable, region: SRE_REGION } },
       relations: {
         contribuable: true,
         paiement: { obligation: { typeImpot: true } },
@@ -61,7 +61,7 @@ export class DocumentsService {
     return documents.map((document) => this.vueDocument(document));
   }
 
-  async obtenirDocument(id: string, utilisateur: UtilisateurAuthentifie) {
+  async obtenirDocument(id: string, utilisateur: AuthenticatedUser) {
     const document = await this.chargerDocument(id);
     this.verifierAcces(document, utilisateur);
     return this.vueDocument(document, true);
@@ -69,7 +69,7 @@ export class DocumentsService {
 
   async obtenirPdf(
     id: string,
-    utilisateur: UtilisateurAuthentifie,
+    utilisateur: AuthenticatedUser,
   ): Promise<{ numero: string; contenu: Buffer }> {
     const document = await this.chargerDocument(id);
     this.verifierAcces(document, utilisateur);
@@ -94,19 +94,19 @@ export class DocumentsService {
   }
 
   private verifierAcces(
-    document: DocumentPaiementEntity,
-    utilisateur: UtilisateurAuthentifie,
+    document: PaymentDocumentEntity,
+    utilisateur: AuthenticatedUser,
   ) {
     if (
-      document.statut !== StatutDocument.VALIDE ||
-      document.contribuable.region !== REGION_SRE
+      document.statut !== DocumentStatus.VALIDE ||
+      document.contribuable.region !== SRE_REGION
     ) {
       throw new NotFoundException(
         "Ce document n'est pas disponible dans le périmètre du service.",
       );
     }
     if (
-      utilisateur.role !== RoleCompte.ADMIN &&
+      utilisateur.role !== AccountRole.ADMIN &&
       document.contribuable.id !== utilisateur.contribuableId
     ) {
       throw new ForbiddenException("Ce document ne vous appartient pas.");
@@ -115,9 +115,9 @@ export class DocumentsService {
 
   private async creerDocument(
     gestionnaire: EntityManager,
-    paiement: PaiementEntity,
-    type: TypeDocumentPaiement,
-    administrateur: UtilisateurEntity | null,
+    paiement: PaymentEntity,
+    type: PaymentDocumentType,
+    administrateur: UserEntity | null,
   ) {
     const dateEmission = new Date();
     const annee = dateEmission.getFullYear();
@@ -126,20 +126,20 @@ export class DocumentsService {
       .slice(-12)
       .toUpperCase();
     const prefixe =
-      type === TypeDocumentPaiement.ACCUSE_DECLARATION ? "ACC" : "REC";
+      type === PaymentDocumentType.ACCUSE_DECLARATION ? "ACC" : "REC";
     const numero = `SRE-${prefixe}-${annee}-${suffixe}`;
     const emetteur = this.configuration.get<string>(
       "DOCUMENT_ISSUER",
       "SRE · document interne",
     );
     const mention =
-      type === TypeDocumentPaiement.ACCUSE_DECLARATION
+      type === PaymentDocumentType.ACCUSE_DECLARATION
         ? "Accusé de réception de la déclaration. Ce document confirme uniquement la soumission des informations déclarées par l'usager. Il ne confirme pas la réception de fonds ni le règlement d'un impôt."
         : "Reçu interne SRE émis après une décision administrative de confirmation. Aucun prestataire bancaire ou mobile-money n'étant connecté, ce document ne constitue pas un reçu bancaire, une preuve de transfert ni une confirmation indépendante de réception de fonds.";
 
     const instantane: Record<string, unknown> = {
       titre:
-        type === TypeDocumentPaiement.ACCUSE_DECLARATION
+        type === PaymentDocumentType.ACCUSE_DECLARATION
           ? "Accusé de réception de déclaration"
           : "Reçu interne SRE",
       numero,
@@ -173,11 +173,11 @@ export class DocumentsService {
       emettePar: administrateur?.nom ?? null,
     };
 
-    const depot = gestionnaire.getRepository(DocumentPaiementEntity);
+    const depot = gestionnaire.getRepository(PaymentDocumentEntity);
     const document = depot.create({
       numero,
       type,
-      statut: StatutDocument.VALIDE,
+      statut: DocumentStatus.VALIDE,
       paiement,
       contribuable: paiement.contribuable,
       emisPar: administrateur,
@@ -191,7 +191,7 @@ export class DocumentsService {
     return depot.save(document);
   }
 
-  private vueDocument(document: DocumentPaiementEntity, detail = false) {
+  private vueDocument(document: PaymentDocumentEntity, detail = false) {
     const instantane = document.instantane;
     const obligation = (instantane.obligation ?? {}) as Record<string, unknown>;
     const paiement = (instantane.paiement ?? {}) as Record<string, unknown>;
@@ -229,7 +229,7 @@ export class DocumentsService {
     };
   }
 
-  private async genererPdf(document: DocumentPaiementEntity): Promise<Buffer> {
+  private async genererPdf(document: PaymentDocumentEntity): Promise<Buffer> {
     const instantane = document.instantane;
     const contribuable = (instantane.contribuable ?? {}) as Record<
       string,
@@ -255,7 +255,7 @@ export class DocumentsService {
         .text(document.emetteur.toUpperCase());
       pdf.moveDown(2);
       const titre =
-        document.type === TypeDocumentPaiement.ACCUSE_DECLARATION
+        document.type === PaymentDocumentType.ACCUSE_DECLARATION
           ? "ACCUSÉ DE RÉCEPTION DE DÉCLARATION"
           : "REÇU INTERNE SRE";
       pdf.fontSize(19).text(titre, { align: "left" });
@@ -320,7 +320,7 @@ export class DocumentsService {
       pdf.moveDown(1.1);
 
       const alerte =
-        document.type === TypeDocumentPaiement.ACCUSE_DECLARATION
+        document.type === PaymentDocumentType.ACCUSE_DECLARATION
           ? "ACCUSÉ DE SOUMISSION — PAS UNE PREUVE DE PAIEMENT"
           : "REÇU INTERNE DE DÉCISION — PAS UNE PREUVE BANCAIRE";
       pdf.fillColor("#9a4d0b").font("Helvetica-Bold").fontSize(10).text(alerte);
