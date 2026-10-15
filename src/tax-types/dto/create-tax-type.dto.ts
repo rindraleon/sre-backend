@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   IsArray,
   IsBoolean,
@@ -67,6 +68,7 @@ export class CreateTaxTypeDto {
   @Max(999999999999999, {
     message: "La valeur doit être au plus de $constraint1.",
   })
+  @ApiPropertyOptional({ type: Number, minimum: 0, maximum: 999999999999999 })
   montantReference?: number;
 
   @IsOptional()
@@ -75,9 +77,11 @@ export class CreateTaxTypeDto {
     each: true,
     message: "Chaque élément doit être une chaîne de caractères.",
   })
+  @ApiPropertyOptional({ type: [String] })
   champsComplementaires?: string[];
 
   @IsOptional()
   @IsBoolean({ message: "Ce champ doit être un booléen." })
+  @ApiPropertyOptional()
   actif?: boolean;
 }

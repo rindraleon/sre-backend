@@ -7,6 +7,7 @@ import {
   Post,
   UseGuards,
 } from "@nestjs/common";
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { AccountRole } from "../database/enums";
 import { Roles } from "../common/decorators/roles.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
@@ -16,30 +17,45 @@ import { AuthenticatedUser } from "../common/interfaces/authenticated-user.inter
 import { CreateObligationDto } from "./dto/create-obligation.dto";
 import { ObligationsService } from "./obligations.service";
 
+@ApiTags("Obligations fiscales")
+@ApiBearerAuth()
 @Controller("obligations")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ObligationsController {
   constructor(private readonly obligations: ObligationsService) {}
 
   @Get("miennes")
+  @ApiOperation({ summary: "Lister les obligations fiscales du contribuable authentifié." })
+  @ApiResponse({ status: 200, description: "Obligations et échéances liées au profil du compte." })
   @Roles(AccountRole.CLIENT)
   listerMesObligations(@CurrentUser() utilisateur: AuthenticatedUser) {
     return this.obligations.listerPourClient(utilisateur.contribuableId ?? "");
   }
 
   @Get()
+  @ApiOperation({ summary: "Lister les obligations fiscales du périmètre Haute Matsiatra." })
+  @ApiResponse({ status: 200, description: "Liste des obligations avec leur contribuable." })
   @Roles(AccountRole.ADMIN)
   listerToutes() {
     return this.obligations.listerPourAdministration();
   }
 
   @Post()
+  @ApiOperation({ summary: "Créer une obligation fiscale pour un contribuable et un type d'impôt actif." })
+  @ApiResponse({ status: 201, description: "Obligation créée avec un montant et une échéance transmis par l'administration." })
+  @ApiResponse({ status: 400, description: "Données invalides ou type de contribuable non éligible." })
+  @ApiResponse({ status: 404, description: "Contribuable ou type d'impôt actif introuvable." })
+  @ApiResponse({ status: 409, description: "Référence d'obligation déjà utilisée." })
   @Roles(AccountRole.ADMIN)
   creer(@Body() donnees: CreateObligationDto) {
     return this.obligations.creer(donnees);
   }
 
   @Get(":id")
+  @ApiOperation({ summary: "Consulter une obligation accessible à la session." })
+  @ApiResponse({ status: 200, description: "Détails de l'obligation." })
+  @ApiResponse({ status: 403, description: "L'obligation ne correspond pas au contribuable connecté." })
+  @ApiResponse({ status: 404, description: "Obligation introuvable." })
   obtenirUne(
     @Param("id", new ParseUUIDPipe()) id: string,
     @CurrentUser() utilisateur: AuthenticatedUser,

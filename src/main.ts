@@ -1,12 +1,15 @@
 import "reflect-metadata";
 import helmet from "helmet";
+import { randomUUID } from "node:crypto";
 import { ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
-import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
+import { SwaggerModule } from "@nestjs/swagger";
 import type { NextFunction, Request, Response } from "express";
 import { AppModule } from "./app.module";
 import { HttpErrorFilter } from "./common/filters/http-error.filter";
+import { createValidationException } from "./common/validation/validation-errors";
+import { addApiAuthorExtension, createOpenApiConfiguration, isOpenApiEnabled } from "./docs";
 
 async function demarrer() {
   const application = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -17,6 +20,15 @@ async function demarrer() {
     .split(",")
     .map((origine) => origine.trim())
     .filter(Boolean);
+
+  application.use(
+    (_requete: Request, reponse: Response, suivant: NextFunction) => {
+      const identifiantRequete = randomUUID();
+      reponse.locals.requestId = identifiantRequete;
+      reponse.setHeader("X-Request-ID", identifiantRequete);
+      suivant();
+    },
+  );
 
   const entetesSecurite = helmet();
   const entetesSwagger = helmet({ contentSecurityPolicy: false });
@@ -34,6 +46,7 @@ async function demarrer() {
     origin: origines,
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    exposedHeaders: ["X-Request-ID"],
     credentials: false,
   });
   application.useGlobalPipes(
@@ -42,25 +55,26 @@ async function demarrer() {
       forbidNonWhitelisted: true,
       transform: true,
       transformOptions: { enableImplicitConversion: true },
+      exceptionFactory: createValidationException,
     }),
   );
   application.useGlobalFilters(new HttpErrorFilter());
 
-  const configurationSwagger = new DocumentBuilder()
-    .setTitle("API SRE — Haute Matsiatra")
-    .setDescription(
-      "API NestJS du portail SRE. Les déclarations saisies et références de transaction ne sont pas une preuve de règlement; un reçu interne n'est créé qu'après une décision administrative.",
-    )
-    .setVersion("1.0.0")
-    .addBearerAuth()
-    .build();
-  const documentSwagger = SwaggerModule.createDocument(
-    application,
-    configurationSwagger,
+  const documentSwagger = addApiAuthorExtension(
+    SwaggerModule.createDocument(application, createOpenApiConfiguration()),
   );
-  // Documentation interactive uniquement hors production.
-  if (configuration.get<string>("NODE_ENV", "development") !== "production") {
-    SwaggerModule.setup("docs", application, documentSwagger);
+  // L'interface et son export OpenAPI restent réservés aux environnements non productifs.
+  if (isOpenApiEnabled(configuration.get<string>("NODE_ENV", "development"))) {
+    SwaggerModule.setup("docs", application, documentSwagger, {
+      jsonDocumentUrl: "docs-json",
+      yamlDocumentUrl: "docs-yaml",
+      customSiteTitle: "Documentation API SRE — Haute Matsiatra",
+      swaggerOptions: {
+        displayRequestDuration: true,
+        filter: true,
+        persistAuthorization: false,
+      },
+    });
   }
 
   application.enableShutdownHooks();

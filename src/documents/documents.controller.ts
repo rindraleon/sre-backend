@@ -6,6 +6,7 @@ import {
   StreamableFile,
   UseGuards,
 } from "@nestjs/common";
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { AccountRole } from "../database/enums";
 import { Roles } from "../common/decorators/roles.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
@@ -14,18 +15,25 @@ import { RolesGuard } from "../common/guards/roles.guard";
 import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
 import { DocumentsService } from "./documents.service";
 
+@ApiTags("Documents fiscaux")
+@ApiBearerAuth()
 @Controller("documents")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class DocumentsController {
   constructor(private readonly documents: DocumentsService) {}
 
   @Get("miennes")
+  @ApiOperation({ summary: "Lister les documents du contribuable authentifié." })
+  @ApiResponse({ status: 200, description: "Accusés et reçus internes accessibles au compte." })
   @Roles(AccountRole.CLIENT)
   listerMesDocuments(@CurrentUser() utilisateur: AuthenticatedUser) {
     return this.documents.listerMesDocuments(utilisateur.contribuableId ?? "");
   }
 
   @Get(":id/pdf")
+  @ApiOperation({ summary: "Télécharger le PDF d'un document autorisé." })
+  @ApiResponse({ status: 200, description: "Fichier PDF en téléchargement." })
+  @ApiResponse({ status: 404, description: "Document absent, annulé ou hors propriété." })
   async telechargerPdf(
     @Param("id", new ParseUUIDPipe()) id: string,
     @CurrentUser() utilisateur: AuthenticatedUser,
@@ -39,6 +47,9 @@ export class DocumentsController {
   }
 
   @Get(":id")
+  @ApiOperation({ summary: "Consulter les métadonnées d'un document autorisé." })
+  @ApiResponse({ status: 200, description: "Métadonnées du document." })
+  @ApiResponse({ status: 404, description: "Document introuvable ou hors propriété." })
   obtenirUnDocument(
     @Param("id", new ParseUUIDPipe()) id: string,
     @CurrentUser() utilisateur: AuthenticatedUser,

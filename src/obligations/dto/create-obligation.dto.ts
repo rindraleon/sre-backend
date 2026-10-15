@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   IsDateString,
   IsInt,
@@ -22,6 +23,7 @@ export class CreateObligationDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional({ minLength: 3, maxLength: 64 })
   referenceFiscale?: string;
 
   @IsString({ message: "Ce champ doit être une chaîne de caractères." })

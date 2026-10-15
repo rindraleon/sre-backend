@@ -10,6 +10,7 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { AccountRole, PaymentStatus } from "../database/enums";
 import { Roles } from "../common/decorators/roles.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
@@ -20,12 +21,23 @@ import { CreatePaymentDto } from "./dto/create-payment.dto";
 import { PaymentDecisionDto } from "./dto/payment-decision.dto";
 import { PaymentsService } from "./payments.service";
 
+@ApiTags("Déclarations de paiement")
+@ApiBearerAuth()
 @Controller("paiements")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class PaymentsController {
   constructor(private readonly paiements: PaymentsService) {}
 
   @Post()
+  @ApiOperation({
+    summary: "Soumettre une déclaration à l'examen administratif.",
+    description: "Le montant vient de l'obligation. La référence et les informations déclarées ne déclenchent aucun transfert et ne prouvent pas un règlement.",
+  })
+  @ApiResponse({ status: 201, description: "Déclaration créée en attente d'examen; un accusé de soumission peut être téléchargé." })
+  @ApiResponse({ status: 400, description: "Données de déclaration invalides." })
+  @ApiResponse({ status: 403, description: "Un compte client lié au contribuable est requis." })
+  @ApiResponse({ status: 404, description: "Obligation absente ou inaccessible." })
+  @ApiResponse({ status: 409, description: "Une déclaration existe déjà ou l'obligation n'est pas éligible." })
   @Roles(AccountRole.CLIENT)
   creerDeclaration(
     @CurrentUser() utilisateur: AuthenticatedUser,
@@ -35,12 +47,20 @@ export class PaymentsController {
   }
 
   @Get("miennes")
+  @ApiOperation({ summary: "Lister les déclarations du contribuable authentifié." })
+  @ApiResponse({ status: 200, description: "Déclarations du compte, avec leur historique et les documents disponibles." })
   @Roles(AccountRole.CLIENT)
   listerMesPaiements(@CurrentUser() utilisateur: AuthenticatedUser) {
     return this.paiements.listerMesPaiements(utilisateur);
   }
 
   @Get()
+  @ApiOperation({ summary: "Lister les déclarations du périmètre Haute Matsiatra (administration)." })
+  @ApiQuery({ name: "statut", required: false, enum: PaymentStatus, description: "Filtre de statut métier." })
+  @ApiQuery({ name: "page", required: false, type: Number, example: 1 })
+  @ApiQuery({ name: "parPage", required: false, type: Number, example: 25, description: "Maximum 100 lignes par page." })
+  @ApiResponse({ status: 200, description: "Page de déclarations selon les filtres." })
+  @ApiResponse({ status: 400, description: "Filtre de statut invalide." })
   @Roles(AccountRole.ADMIN)
   listerPourAdministration(
     @Query("statut") statut?: string,
@@ -62,6 +82,15 @@ export class PaymentsController {
   }
 
   @Patch(":id/decision")
+  @ApiOperation({
+    summary: "Enregistrer une décision administrative sur une déclaration.",
+    description: "CONFIRME, REJETE ou CORRECTION_DEMANDEE. Un motif est requis pour le rejet et la demande de correction; CONFIRME crée un reçu interne, pas une preuve bancaire.",
+  })
+  @ApiResponse({ status: 200, description: "Décision et historique enregistrés; les documents reflètent le statut serveur." })
+  @ApiResponse({ status: 400, description: "Statut ou motif de décision invalide." })
+  @ApiResponse({ status: 403, description: "Action réservée à l'administration." })
+  @ApiResponse({ status: 404, description: "Déclaration introuvable dans le périmètre." })
+  @ApiResponse({ status: 409, description: "Une décision a déjà été enregistrée." })
   @Roles(AccountRole.ADMIN)
   decider(
     @Param("id", new ParseUUIDPipe()) id: string,
@@ -72,6 +101,9 @@ export class PaymentsController {
   }
 
   @Get(":id")
+  @ApiOperation({ summary: "Consulter une déclaration accessible à l'utilisateur courant." })
+  @ApiResponse({ status: 200, description: "Déclaration, historique métier et documents associés." })
+  @ApiResponse({ status: 404, description: "Déclaration introuvable ou hors périmètre." })
   obtenirUne(
     @Param("id", new ParseUUIDPipe()) id: string,
     @CurrentUser() utilisateur: AuthenticatedUser,

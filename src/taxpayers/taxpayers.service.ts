@@ -239,10 +239,17 @@ export class TaxpayersService {
   async supprimer(id: string) {
     return this.sourceDeDonnees.transaction(async (gestionnaire) => {
       const depotContribuables = gestionnaire.getRepository(TaxpayerEntity);
+      // PostgreSQL interdit FOR UPDATE sur le côté nullable d'une jointure
+      // externe : on verrouille d'abord la seule ligne contribuable, puis on
+      // charge la relation utilisateur (facultative) hors du verrou.
+      const verrou = await depotContribuables.findOne({
+        where: { id, region: SRE_REGION },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!verrou) throw new NotFoundException("Contribuable introuvable.");
       const contribuable = await depotContribuables.findOne({
         where: { id, region: SRE_REGION },
         relations: { utilisateur: true },
-        lock: { mode: "pessimistic_write" },
       });
       if (!contribuable)
         throw new NotFoundException("Contribuable introuvable.");

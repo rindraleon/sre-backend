@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
   IsEmail,
@@ -29,6 +30,7 @@ export class RegistrationProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   prenom?: string;
 
   @IsOptional()
@@ -37,6 +39,7 @@ export class RegistrationProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   raisonSociale?: string;
 
   @IsOptional()
@@ -45,6 +48,7 @@ export class RegistrationProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   nomCommercial?: string;
 
   @IsOptional()
@@ -53,6 +57,7 @@ export class RegistrationProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   nif?: string;
 
   @IsOptional()
@@ -61,6 +66,7 @@ export class RegistrationProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   stat?: string;
 
   @IsString({ message: "Ce champ doit être une chaîne de caractères." })
@@ -96,6 +102,7 @@ export class RegistrationProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   representantLegal?: string;
 
   @IsOptional()
@@ -104,6 +111,7 @@ export class RegistrationProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   nomContact?: string;
 
   @IsOptional()
@@ -112,6 +120,7 @@ export class RegistrationProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   prenomContact?: string;
 
   @IsOptional()
@@ -120,6 +129,7 @@ export class RegistrationProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   fonctionContact?: string;
 }
 
@@ -144,5 +154,6 @@ export class RegistrationDto {
   @IsOptional()
   @ValidateNested()
   @Type(() => RegistrationProfileDto)
+  @ApiPropertyOptional({ type: () => RegistrationProfileDto })
   profil?: RegistrationProfileDto;
 }

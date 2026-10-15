@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   IsEnum,
   IsOptional,
@@ -8,9 +9,15 @@ import {
 import { PaymentStatus } from "../../database/enums";
 
 export class PaymentDecisionDto {
+  @ApiProperty({ enum: PaymentStatus, description: "Statut administratif final ou demande de correction." })
   @IsEnum(PaymentStatus, { message: "La valeur sélectionnée est invalide." })
   statut!: PaymentStatus;
 
+  @ApiPropertyOptional({
+    minLength: 5,
+    maxLength: 1500,
+    description: "Motif obligatoire pour un rejet ou une demande de correction; omis pour CONFIRME.",
+  })
   @ValidateIf(
     (donnees: PaymentDecisionDto) => donnees.statut !== PaymentStatus.CONFIRME,
   )

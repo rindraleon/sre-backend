@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from "@nestjs/swagger";
 import { IsOptional, IsString, Length } from "class-validator";
 
 export class UpdateTaxpayerProfileDto {
@@ -7,6 +8,7 @@ export class UpdateTaxpayerProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   adresse?: string;
 
   @IsOptional()
@@ -15,6 +17,7 @@ export class UpdateTaxpayerProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   ville?: string;
 
   @IsOptional()
@@ -23,6 +26,7 @@ export class UpdateTaxpayerProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   telephone?: string;
 
   @IsOptional()
@@ -31,5 +35,6 @@ export class UpdateTaxpayerProfileDto {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
+  @ApiPropertyOptional()
   nomCommercial?: string;
 }

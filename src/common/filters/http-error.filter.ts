@@ -22,6 +22,8 @@ export class HttpErrorFilter implements ExceptionFilter {
     const contexteHttp = hote.switchToHttp();
     const requete = contexteHttp.getRequest<Request>();
     const reponse = contexteHttp.getResponse<Response>();
+    const identifiantRequete =
+      typeof reponse.locals?.requestId === "string" ? reponse.locals.requestId : undefined;
     const statut =
       exception instanceof HttpException
         ? exception.getStatus()
@@ -67,8 +69,9 @@ export class HttpErrorFilter implements ExceptionFilter {
         exception instanceof Error
           ? (exception.stack ?? exception.message)
           : String(exception);
+      const chemin = requete.path || requete.route?.path || "[route inconnue]";
       this.journal.error(
-        `${requete.method} ${requete.originalUrl ?? requete.url}`,
+        `${identifiantRequete ? `[${identifiantRequete}] ` : ""}${requete.method} ${chemin}`,
         detailJournal,
       );
     }
@@ -78,6 +81,7 @@ export class HttpErrorFilter implements ExceptionFilter {
       statusCode: statut,
       message,
       ...(errors ? { errors } : {}),
+      ...(identifiantRequete ? { requestId: identifiantRequete } : {}),
       timestamp: new Date().toISOString(),
     });
   }
