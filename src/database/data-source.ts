@@ -3,14 +3,20 @@ import { DataSource } from "typeorm";
 import { TaxpayerEntity } from "./entities/taxpayer.entity";
 import { PaymentDocumentEntity } from "./entities/payment-document.entity";
 import { PaymentEventEntity } from "./entities/payment-event.entity";
+import { LoginAttemptEntity } from "./entities/login-attempt.entity";
 import { NotificationEntity } from "./entities/notification.entity";
 import { ObligationEntity } from "./entities/obligation.entity";
 import { PaymentEntity } from "./entities/payment.entity";
 import { TaxTypeEntity } from "./entities/tax-type.entity";
 import { UserEntity } from "./entities/user.entity";
+import { ActivationRequestEntity } from "./entities/activation-request.entity";
+import { ActivityLogEntity } from "./entities/activity-log.entity";
 import { InitialSchema1760270400000 } from "./migrations/InitialSchema1760270400000";
 import { CreerNotifications1760270402000 } from "./migrations/CreerNotifications1760270402000";
 import { RetirerIndicateurDemonstration1760270401000 } from "./migrations/RetirerIndicateurDemonstration1760270401000";
+import { SecuriteAuthCampagnes1760270403000 } from "./migrations/SecuriteAuthCampagnes1760270403000";
+import { PremiereConnexionEntreprises1760270404000 } from "./migrations/PremiereConnexionEntreprises1760270404000";
+import { JournalActivite1760270405000 } from "./migrations/JournalActivite1760270405000";
 
 const motDePasseBase = process.env.DB_PASSWORD?.trim();
 if (!motDePasseBase)
@@ -36,11 +42,17 @@ const sreDataSource = new DataSource({
     PaymentEventEntity,
     PaymentDocumentEntity,
     NotificationEntity,
+    LoginAttemptEntity,
+    ActivationRequestEntity,
+    ActivityLogEntity,
   ],
   migrations: [
     InitialSchema1760270400000,
     RetirerIndicateurDemonstration1760270401000,
     CreerNotifications1760270402000,
+    SecuriteAuthCampagnes1760270403000,
+    PremiereConnexionEntreprises1760270404000,
+    JournalActivite1760270405000,
   ],
   migrationsTableName: "migrations_sre",
 });

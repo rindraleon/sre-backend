@@ -8,7 +8,6 @@ import {
 import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
 import { DataSource, Repository } from "typeorm";
-import { TaxpayerEntity } from "../database/entities/taxpayer.entity";
 import { PaymentEventEntity } from "../database/entities/payment-event.entity";
 import { ObligationEntity } from "../database/entities/obligation.entity";
 import { PaymentEntity } from "../database/entities/payment.entity";
@@ -30,8 +29,6 @@ export class PaymentsService {
   constructor(
     @InjectRepository(PaymentEntity)
     private readonly paiements: Repository<PaymentEntity>,
-    @InjectRepository(ObligationEntity)
-    private readonly obligations: Repository<ObligationEntity>,
     private readonly sourceDeDonnees: DataSource,
     private readonly documents: DocumentsService,
   ) {}

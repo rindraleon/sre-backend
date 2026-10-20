@@ -56,6 +56,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         ? { contribuableId: utilisateur.contribuable.id }
         : {}),
       changementMotDePasseRequis: utilisateur.changementMotDePasseRequis,
+      profilComplete: utilisateur.profilComplete,
     };
   }
 }

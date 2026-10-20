@@ -5,6 +5,8 @@ import { createTransport, type Transporter } from "nodemailer";
 export interface OutgoingEmail {
   destinataire: string;
   nomDestinataire?: string;
+  /** Adresse à laquelle le destinataire peut répondre (validée avant envoi). */
+  replyTo?: string;
   sujet: string;
   texte: string;
   html: string;
@@ -37,6 +39,8 @@ export function buildEmailHtml(parametres: {
   titre: string;
   message: string;
   lienApplication: string;
+  /** Libellé du lien d'action (par défaut : « Consulter mon espace SRE »). */
+  libelleLien?: string;
 }): string {
   const bonjour = parametres.nomDestinataire
     ? `Bonjour ${echapperHtml(parametres.nomDestinataire)},`
@@ -45,7 +49,7 @@ export function buildEmailHtml(parametres: {
 <p>${bonjour}</p>
 <h1 style="font-size:18px">${echapperHtml(parametres.titre)}</h1>
 <p>${echapperHtml(parametres.message)}</p>
-<p><a href="${echapperHtml(parametres.lienApplication)}">Consulter mon espace SRE</a></p>
+<p><a href="${echapperHtml(parametres.lienApplication)}">${echapperHtml(parametres.libelleLien ?? "Consulter mon espace SRE")}</a></p>
 <p style="font-size:12px;color:#5b6b7a">Message automatique du portail SRE. Ne répondez pas à cet e-mail et ne transmettez jamais votre mot de passe.</p>
 </body></html>`;
 }
@@ -84,6 +88,8 @@ export class MailService implements MailSender {
   async envoyer(courriel: OutgoingEmail): Promise<void> {
     if (!isValidEmail(courriel.destinataire))
       throw new Error("Adresse e-mail du destinataire absente ou invalide.");
+    if (courriel.replyTo && !isValidEmail(courriel.replyTo))
+      throw new Error("Adresse e-mail Reply-To absente ou invalide.");
     const mode = this.configuration
       .get<string>("MAIL_TRANSPORT", "")
       .toLowerCase();
@@ -101,6 +107,7 @@ export class MailService implements MailSender {
       await this.transporteur.sendMail({
         from: expediteur,
         to: courriel.destinataire,
+        ...(courriel.replyTo ? { replyTo: courriel.replyTo } : {}),
         subject: courriel.sujet,
         text: courriel.texte,
         html: courriel.html,

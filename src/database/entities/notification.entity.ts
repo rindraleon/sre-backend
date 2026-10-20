@@ -16,6 +16,8 @@ export enum NotificationEmailStatus {
   NON_CONFIGURE = "NON_CONFIGURE",
   EN_ATTENTE = "EN_ATTENTE",
   ENVOYE = "ENVOYE",
+  /** Confirmée par le fournisseur de messagerie — jamais posée sans preuve. */
+  DELIVRE = "DELIVRE",
   ECHEC = "ECHEC",
 }
 
@@ -39,6 +41,11 @@ export class NotificationEntity {
   @ManyToOne(() => ObligationEntity, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "obligation_id" })
   obligation!: ObligationEntity | null;
+
+  /** Administrateur à l'origine d'une notification manuelle (traçabilité). */
+  @ManyToOne(() => UserEntity, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "cree_par_id" })
+  creePar!: UserEntity | null;
 
   /** Ex. AVANT_7, AVANT_3, AVANT_1, JOUR_J, RETARD_1, RETARD_3, RETARD_7. */
   @Column({ name: "type_rappel", type: "varchar", length: 24 })

@@ -52,8 +52,16 @@ export class TaxpayersController {
   }
 
   @Post("import")
-  @ApiOperation({ summary: "Importer jusqu'à 2 000 profils contribuables, sans créer de comptes." })
-  @ApiResponse({ status: 201, description: "Bilan serveur des profils créés et ignorés." })
+  @ApiOperation({
+    summary: "Importer jusqu'à 2 000 profils contribuables et créer les comptes des entreprises valides.",
+    description:
+      "Chaque ligne reçoit un état détaillé (compte créé, profil créé, doublon, rejetée avec ses erreurs). Pour chaque entreprise valide (raison sociale + e-mail + STAT), un compte distinct est créé (STAT = mot de passe provisoire haché) et un courriel d'activation est envoyé. L'import est idempotent : aucune création en double.",
+  })
+  @ApiResponse({
+    status: 201,
+    description:
+      "Bilan détaillé : rapport ligne à ligne, comptes créés, doublons, rejets, statuts d'envoi des courriels.",
+  })
   @ApiResponse({ status: 400, description: "Liste vide, trop volumineuse ou invalide." })
   @Roles(AccountRole.ADMIN)
   importer(@Body() donnees: ImportTaxpayersDto) {

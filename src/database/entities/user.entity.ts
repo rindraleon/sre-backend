@@ -53,8 +53,37 @@ export class UserEntity {
   })
   changementMotDePasseRequis!: boolean;
 
+  /**
+   * Profil complété / vérifié par l'utilisateur (configuration initiale).
+   * Tant que `changementMotDePasseRequis` ou `!profilComplete`, les routes
+   * métier restent bloquées côté serveur (parcours de configuration).
+   */
+  @Column({ name: "profil_complete", type: "boolean", default: true })
+  profilComplete!: boolean;
+
   @Column({ name: "derniere_connexion", type: "timestamptz", nullable: true })
   derniereConnexion!: Date | null;
+
+  /** Vérification de l'adresse e-mail par code à usage unique. */
+  @Column({ name: "courriel_verifie", type: "boolean", default: false })
+  courrielVerifie!: boolean;
+
+  @Column({
+    name: "verification_courriel_code_hash",
+    type: "varchar",
+    length: 128,
+    nullable: true,
+    select: false,
+  })
+  verificationCourrielCodeHash!: string | null;
+
+  @Column({
+    name: "verification_courriel_expire_le",
+    type: "timestamptz",
+    nullable: true,
+    select: false,
+  })
+  verificationCourrielExpireLe!: Date | null;
 
   @OneToOne(() => TaxpayerEntity, (contribuable) => contribuable.utilisateur)
   contribuable?: TaxpayerEntity;

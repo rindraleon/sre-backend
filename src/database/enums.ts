@@ -59,3 +59,18 @@ export enum TaxPeriodicity {
   ANNUELLE = "ANNUELLE",
   PONCTUELLE = "PONCTUELLE",
 }
+
+/** Type de jeton sécurisé à usage limité (empreinte SHA-256 stockée). */
+export enum ActivationTokenType {
+  /** Première connexion d'un compte créé par import (parcours d'activation). */
+  ACTIVATION = "ACTIVATION",
+  /** Réinitialisation sécurisée du mot de passe. */
+  REINITIALISATION = "REINITIALISATION",
+}
+
+/** Statut d'envoi d'un courriel d'activation / première connexion. */
+export enum ActivationEmailStatus {
+  EN_ATTENTE = "EN_ATTENTE",
+  ENVOYEE = "ENVOYEE",
+  ECHEC = "ECHEC",
+}

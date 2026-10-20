@@ -1,8 +1,11 @@
 import { Module } from "@nestjs/common";
-import { APP_GUARD } from "@nestjs/core";
+import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { TypeOrmModule } from "@nestjs/typeorm";
+import { ConfigurationInitialeInterceptor } from "./common/interceptors/configuration-initiale.interceptor";
+import { JournalActiviteInterceptor } from "./common/interceptors/journal-activite.interceptor";
+import { ActivityLogEntity } from "./database/entities/activity-log.entity";
 import { AuthModule } from "./auth/auth.module";
 import { TaxpayersModule } from "./taxpayers/taxpayers.module";
 import { DocumentsModule } from "./documents/documents.module";
@@ -12,6 +15,7 @@ import { ObligationsModule } from "./obligations/obligations.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { TaxTypesModule } from "./tax-types/tax-types.module";
 import { UsersModule } from "./users/users.module";
+import { JournalModule } from "./journal/journal.module";
 
 @Module({
   imports: [
@@ -56,8 +60,16 @@ import { UsersModule } from "./users/users.module";
     PaymentsModule,
     DocumentsModule,
     UsersModule,
+    JournalModule,
+    TypeOrmModule.forFeature([ActivityLogEntity]),
   ],
   controllers: [HealthController],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Blocage serveur des fonctionnalités métier pendant la configuration initiale.
+    { provide: APP_INTERCEPTOR, useClass: ConfigurationInitialeInterceptor },
+    // Audit : journalise chaque action métier d'un compte authentifié.
+    { provide: APP_INTERCEPTOR, useClass: JournalActiviteInterceptor },
+  ],
 })
 export class AppModule {}

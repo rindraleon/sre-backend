@@ -4,29 +4,49 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { InjectRepository } from "@nestjs/typeorm";
+import * as bcrypt from "bcryptjs";
 import { DataSource, Repository } from "typeorm";
 import { TaxpayerEntity } from "../database/entities/taxpayer.entity";
 import { ObligationEntity } from "../database/entities/obligation.entity";
 import { PaymentEntity } from "../database/entities/payment.entity";
 import { UserEntity } from "../database/entities/user.entity";
+import {
+  AccountRole,
+  AccountStatus,
+  ActivationEmailStatus,
+  TaxpayerType,
+} from "../database/enums";
 import { SRE_REGION } from "../database/region";
 import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
+import { ActivationService } from "../notifications/activation.service";
+import { isValidEmail } from "../notifications/mail.service";
 import { CreateTaxpayerDto } from "./dto/create-taxpayer.dto";
 import { UpdateTaxpayerProfileDto } from "./dto/update-taxpayer-profile.dto";
+
+/** État détaillé d'une ligne d'import Excel. */
+export interface LigneImport {
+  ligne: number;
+  libelle: string;
+  statut: "COMPTE_CREE" | "PROFIL_CREE" | "DOUBLON" | "REJETE";
+  motif?: string;
+  erreurs?: string[];
+  profilId?: string;
+  compteId?: string;
+  statutCourriel?: string;
+}
 
 @Injectable()
 export class TaxpayersService {
   constructor(
     @InjectRepository(TaxpayerEntity)
     private readonly contribuables: Repository<TaxpayerEntity>,
-    @InjectRepository(ObligationEntity)
-    private readonly obligations: Repository<ObligationEntity>,
-    @InjectRepository(PaymentEntity)
-    private readonly paiements: Repository<PaymentEntity>,
     @InjectRepository(UserEntity)
     private readonly utilisateurs: Repository<UserEntity>,
     private readonly sourceDeDonnees: DataSource,
+    private readonly configuration: ConfigService,
+    private readonly activation: ActivationService,
   ) {}
 
   async obtenirMonProfil(utilisateur: AuthenticatedUser) {
@@ -157,83 +177,265 @@ export class TaxpayersService {
     return this.vueContribuable(await this.contribuables.save(profil));
   }
 
+  /**
+   * Import Excel (données lues et pré-validées côté client, validées puis
+   * enregistrées ici) :
+   * - chaque ligne reçoit un état détaillé (compte créé, profil créé, doublon,
+   *   rejetée avec ses erreurs) ;
+   * - chaque entreprise valide (raison sociale + e-mail + STAT) reçoit un
+   *   compte distinct lié à son profil, avec le STAT comme mot de passe
+   *   provisoire haché (jamais stocké en clair) ;
+   * - un courriel d'activation (lien à usage unique + identifiants provisoires)
+   *   est déclenché pour chaque compte créé, avec suivi d'envoi et réessai ;
+   * - idempotence : une nouvelle importation du même fichier ne crée aucun
+   *   compte ni profil en double (doublons signalés ligne par ligne).
+   */
   async importer(profils: CreateTaxpayerDto[]) {
     if (!profils.length)
       throw new BadRequestException(
         "Aucun profil à importer n'a été transmis.",
       );
-    return this.sourceDeDonnees.transaction(async (gestionnaire) => {
-      const depotContribuables = gestionnaire.getRepository(TaxpayerEntity);
-      const depotUtilisateurs = gestionnaire.getRepository(UserEntity);
-      const existants = await depotContribuables.find({
-        select: { courriel: true, nif: true, stat: true },
-      });
-      const comptes = await depotUtilisateurs.find({
-        select: { courriel: true },
-      });
-      const courriels = new Set([
-        ...existants.map((entree) => entree.courriel.toLowerCase()),
-        ...comptes.map((entree) => entree.courriel.toLowerCase()),
-      ]);
-      const nifs = new Set(
-        existants
-          .map((entree) => entree.nif?.toUpperCase())
-          .filter((valeur): valeur is string => Boolean(valeur)),
-      );
-      const stats = new Set(
-        existants
-          .map((entree) => entree.stat?.toUpperCase())
-          .filter((valeur): valeur is string => Boolean(valeur)),
-      );
-      const nouveaux: TaxpayerEntity[] = [];
-      let ignorees = 0;
 
-      for (const donnees of profils) {
-        const courriel = donnees.courriel.trim().toLowerCase();
-        const nif = donnees.nif?.trim().toUpperCase() || null;
-        const stat = donnees.stat?.trim().toUpperCase() || null;
-        if (
-          courriels.has(courriel) ||
-          (nif && nifs.has(nif)) ||
-          (stat && stats.has(stat))
-        ) {
-          ignorees += 1;
-          continue;
-        }
-        const profil = depotContribuables.create({
-          utilisateur: null,
-          type: donnees.type,
-          nom: donnees.nom.trim(),
-          prenom: donnees.prenom?.trim() || null,
-          raisonSociale: donnees.raisonSociale?.trim() || null,
-          nomCommercial: donnees.nomCommercial?.trim() || null,
-          nif,
-          stat,
-          adresse: donnees.adresse.trim(),
-          region: SRE_REGION,
-          ville: donnees.ville.trim(),
-          courriel,
-          telephone: donnees.telephone.trim(),
-          representantLegal: donnees.representantLegal?.trim() || null,
-          nomContact: donnees.nomContact?.trim() || null,
-          prenomContact: donnees.prenomContact?.trim() || null,
-          fonctionContact: donnees.fonctionContact?.trim() || null,
-          dateCreationCompte: new Date(),
-        });
-        nouveaux.push(await depotContribuables.save(profil));
-        courriels.add(courriel);
-        if (nif) nifs.add(nif);
-        if (stat) stats.add(stat);
-      }
-
-      return {
-        donnees: nouveaux.map((contribuable) =>
-          this.vueContribuable(contribuable),
-        ),
-        creees: nouveaux.length,
-        ignorees,
-      };
+    // Hachage des mots de passe provisoires en parallèle AVANT la transaction
+    // (bcrypt est coûteux : la transaction reste courte).
+    const tours = Number(this.configuration.get<string>("BCRYPT_ROUNDS", "12"));
+    const typesDeLigne = profils.map((donnees) => {
+      const courriel = donnees.courriel?.trim().toLowerCase() ?? "";
+      const stat = donnees.stat?.trim().toUpperCase() || null;
+      const estEntrepriseAvecCompte =
+        donnees.type === TaxpayerType.ENTREPRISE &&
+        Boolean(stat) &&
+        isValidEmail(courriel) &&
+        Boolean(donnees.raisonSociale?.trim());
+      return { courriel, stat, estEntrepriseAvecCompte };
     });
+    const hashes = await Promise.all(
+      typesDeLigne.map((entree) =>
+        entree.estEntrepriseAvecCompte && entree.stat
+          ? bcrypt.hash(entree.stat, tours)
+          : Promise.resolve(null),
+      ),
+    );
+
+    const resultat = await this.sourceDeDonnees.transaction(
+      async (gestionnaire) => {
+        const depotContribuables = gestionnaire.getRepository(TaxpayerEntity);
+        const depotUtilisateurs = gestionnaire.getRepository(UserEntity);
+        const existants = await depotContribuables.find({
+          select: { courriel: true, nif: true, stat: true },
+        });
+        const comptes = await depotUtilisateurs.find({
+          select: { courriel: true },
+        });
+        const courriels = new Set([
+          ...existants.map((entree) => entree.courriel.toLowerCase()),
+          ...comptes.map((entree) => entree.courriel.toLowerCase()),
+        ]);
+        const nifs = new Set(
+          existants
+            .map((entree) => entree.nif?.toUpperCase())
+            .filter((valeur): valeur is string => Boolean(valeur)),
+        );
+        const stats = new Set(
+          existants
+            .map((entree) => entree.stat?.toUpperCase())
+            .filter((valeur): valeur is string => Boolean(valeur)),
+        );
+
+        const rapport: LigneImport[] = [];
+        const nouveaux: TaxpayerEntity[] = [];
+        const comptesCrees: {
+          utilisateur: UserEntity;
+          libelle: string;
+          stat: string;
+        }[] = [];
+        let ignorees = 0;
+        let doublons = 0;
+        let rejetees = 0;
+        let comptesCreesNombre = 0;
+
+        for (const [index, donnees] of profils.entries()) {
+          const ligne = index + 1;
+          const entree = typesDeLigne[index];
+          const courriel = entree.courriel;
+          const stat = entree.stat;
+          const nif = donnees.nif?.trim().toUpperCase() || null;
+          const libelle =
+            donnees.raisonSociale?.trim() || donnees.nom?.trim() || courriel;
+          const erreurs: string[] = [];
+
+          // 1. Présence et validité des informations nécessaires.
+          if (!isValidEmail(courriel))
+            erreurs.push("Adresse e-mail absente ou invalide.");
+          if (donnees.type === TaxpayerType.ENTREPRISE) {
+            if (!donnees.raisonSociale?.trim())
+              erreurs.push("Raison sociale manquante.");
+            if (!stat) erreurs.push("Numéro STAT manquant.");
+          }
+          if (erreurs.length) {
+            rejetees += 1;
+            rapport.push({ ligne, libelle, statut: "REJETE", erreurs });
+            continue;
+          }
+
+          // 2. Doublons (e-mail, NIF, STAT déjà enregistrés).
+          if (courriels.has(courriel)) {
+            doublons += 1;
+            ignorees += 1;
+            rapport.push({
+              ligne,
+              libelle,
+              statut: "DOUBLON",
+              motif: "Adresse e-mail déjà enregistrée (profil ou compte existant).",
+            });
+            continue;
+          }
+          if (nif && nifs.has(nif)) {
+            doublons += 1;
+            ignorees += 1;
+            rapport.push({
+              ligne,
+              libelle,
+              statut: "DOUBLON",
+              motif: "NIF déjà enregistré.",
+            });
+            continue;
+          }
+          if (stat && stats.has(stat)) {
+            doublons += 1;
+            ignorees += 1;
+            rapport.push({
+              ligne,
+              libelle,
+              statut: "DOUBLON",
+              motif: "Numéro STAT déjà enregistré.",
+            });
+            continue;
+          }
+
+          // 3. Création du profil, puis du compte pour les entreprises valides.
+          const profil = depotContribuables.create({
+            utilisateur: null,
+            type: donnees.type,
+            nom: donnees.nom.trim(),
+            prenom: donnees.prenom?.trim() || null,
+            raisonSociale: donnees.raisonSociale?.trim() || null,
+            nomCommercial: donnees.nomCommercial?.trim() || null,
+            nif,
+            stat,
+            adresse: donnees.adresse.trim(),
+            region: SRE_REGION,
+            ville: donnees.ville.trim(),
+            courriel,
+            telephone: donnees.telephone.trim(),
+            representantLegal: donnees.representantLegal?.trim() || null,
+            nomContact: donnees.nomContact?.trim() || null,
+            prenomContact: donnees.prenomContact?.trim() || null,
+            fonctionContact: donnees.fonctionContact?.trim() || null,
+            dateCreationCompte: new Date(),
+          });
+          const profilEnregistre = await depotContribuables.save(profil);
+          nouveaux.push(profilEnregistre);
+          courriels.add(courriel);
+          if (nif) nifs.add(nif);
+          if (stat) stats.add(stat);
+
+          if (entree.estEntrepriseAvecCompte && stat && hashes[index]) {
+            // Compte distinct : STAT = mot de passe provisoire (haché),
+            // configuration initiale obligatoire avant tout accès métier.
+            const utilisateur = await depotUtilisateurs.save(
+              depotUtilisateurs.create({
+                nom: libelle.slice(0, 160),
+                courriel,
+                motDePasseHash: hashes[index] as string,
+                role: AccountRole.CLIENT,
+                statut: AccountStatus.ACTIF,
+                changementMotDePasseRequis: true,
+                profilComplete: false,
+              }),
+            );
+            profilEnregistre.utilisateur = utilisateur;
+            await depotContribuables.save(profilEnregistre);
+            comptesCreesNombre += 1;
+            comptesCrees.push({ utilisateur, libelle, stat });
+            rapport.push({
+              ligne,
+              libelle,
+              statut: "COMPTE_CREE",
+              profilId: profilEnregistre.id,
+              compteId: utilisateur.id,
+            });
+          } else {
+            rapport.push({
+              ligne,
+              libelle,
+              statut: "PROFIL_CREE",
+              profilId: profilEnregistre.id,
+            });
+          }
+        }
+
+        return {
+          rapport,
+          donnees: nouveaux.map((contribuable) =>
+            this.vueContribuable(contribuable),
+          ),
+          creees: nouveaux.length,
+          ignorees,
+          comptesCrees: comptesCreesNombre,
+          doublons,
+          rejetees,
+          comptes: comptesCrees.map((entree) => ({
+            utilisateur: entree.utilisateur,
+            libelle: entree.libelle,
+            stat: entree.stat,
+          })),
+        };
+      },
+    );
+
+    // 4. Courriels de première connexion, hors transaction : un échec d'envoi
+    // n'annule pas la création des comptes (statut suivi + réessai par l'admin).
+    const emails = [];
+    for (const entree of resultat.comptes) {
+      try {
+        const demande = await this.activation.creerDemandeActivation(
+          entree.utilisateur,
+          entree.libelle,
+          entree.stat,
+        );
+        emails.push({
+          compteId: entree.utilisateur.id,
+          destinataire: demande.destinataire,
+          statutCourriel: demande.statutCourriel,
+          demandeId: demande.id,
+        });
+      } catch {
+        emails.push({
+          compteId: entree.utilisateur.id,
+          destinataire: entree.utilisateur.courriel,
+          statutCourriel: ActivationEmailStatus.ECHEC,
+          demandeId: null,
+        });
+      }
+    }
+    for (const entree of resultat.rapport) {
+      if (entree.statut === "COMPTE_CREE") {
+        const email = emails.find((e) => e.compteId === entree.compteId);
+        if (email) entree.statutCourriel = email.statutCourriel;
+      }
+    }
+
+    return {
+      donnees: resultat.donnees,
+      creees: resultat.creees,
+      ignorees: resultat.ignorees,
+      rapport: resultat.rapport,
+      comptesCrees: resultat.comptesCrees,
+      doublons: resultat.doublons,
+      rejetees: resultat.rejetees,
+      emails,
+    };
   }
 
   async supprimer(id: string) {

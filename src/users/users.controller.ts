@@ -2,9 +2,12 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from "@nestjs/common";
@@ -15,6 +18,7 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
+import { ActivationService } from "../notifications/activation.service";
 import { UpdateUserStatusDto } from "./dto/update-user-status.dto";
 import { UsersService } from "./users.service";
 
@@ -24,7 +28,10 @@ import { UsersService } from "./users.service";
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(AccountRole.ADMIN)
 export class UsersController {
-  constructor(private readonly utilisateurs: UsersService) {}
+  constructor(
+    private readonly utilisateurs: UsersService,
+    private readonly activation: ActivationService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: "Lister les comptes visibles pour l'administration du périmètre." })
@@ -42,6 +49,28 @@ export class UsersController {
       Number(page) || 1,
       Number(parPage) || 25,
     );
+  }
+
+  @Get("emails-activation")
+  @ApiOperation({
+    summary: "Lister les courriels de première connexion avec leur statut d'envoi.",
+  })
+  @ApiResponse({ status: 200, description: "Courriels d'activation (statut, tentatives, erreur)." })
+  listerEmailsActivation() {
+    return this.activation.listerDemandes();
+  }
+
+  @Post("emails-activation/:id/renvoyer")
+  @ApiOperation({
+    summary: "Réessayer l'envoi d'un courriel de première connexion en échec.",
+    description:
+      "Un nouveau jeton d'activation à usage unique est émis dans le courriel renvoyé (le précédent est invalidé).",
+  })
+  @ApiResponse({ status: 201, description: "Courriel renvoyé, statut mis à jour." })
+  @ApiResponse({ status: 404, description: "Courriel d'activation introuvable." })
+  @HttpCode(HttpStatus.CREATED)
+  renvoyerEmailActivation(@Param("id", new ParseUUIDPipe()) id: string) {
+    return this.activation.renvoyer(id);
   }
 
   @Patch(":id/statut")

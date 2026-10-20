@@ -7,7 +7,6 @@ import { ConfigService } from "@nestjs/config";
 import PDFDocument from "pdfkit";
 import { EntityManager, Repository } from "typeorm";
 import { InjectRepository } from "@nestjs/typeorm";
-import { TaxpayerEntity } from "../database/entities/taxpayer.entity";
 import { PaymentDocumentEntity } from "../database/entities/payment-document.entity";
 import { PaymentEntity } from "../database/entities/payment.entity";
 import { UserEntity } from "../database/entities/user.entity";

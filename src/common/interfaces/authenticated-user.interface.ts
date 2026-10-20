@@ -7,4 +7,6 @@ export interface AuthenticatedUser {
   role: AccountRole;
   contribuableId?: string;
   changementMotDePasseRequis: boolean;
+  /** Profil complété / vérifié (configuration initiale). */
+  profilComplete: boolean;
 }

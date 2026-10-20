@@ -3,7 +3,9 @@ import { ConfigModule, ConfigService } from "@nestjs/config";
 import { JwtModule } from "@nestjs/jwt";
 import { PassportModule } from "@nestjs/passport";
 import { TypeOrmModule } from "@nestjs/typeorm";
+import { LoginAttemptEntity } from "../database/entities/login-attempt.entity";
 import { UserEntity } from "../database/entities/user.entity";
+import { NotificationsModule } from "../notifications/notifications.module";
 import { AuthController } from "./auth.controller";
 import { AuthService } from "./auth.service";
 import { JwtStrategy } from "./jwt.strategy";
@@ -11,7 +13,8 @@ import { JwtStrategy } from "./jwt.strategy";
 @Module({
   imports: [
     ConfigModule,
-    TypeOrmModule.forFeature([UserEntity]),
+    TypeOrmModule.forFeature([UserEntity, LoginAttemptEntity]),
+    NotificationsModule,
     PassportModule.register({ defaultStrategy: "jwt" }),
     JwtModule.registerAsync({
       imports: [ConfigModule],

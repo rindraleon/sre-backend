@@ -2,8 +2,12 @@
   "name": "sre-backend",
   "version": "1.0.0",
   "private": true,
+  "author": "Rindra & Harena",
   "description": "API NestJS du portail SRE \u2014 Madagascar",
   "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\"",

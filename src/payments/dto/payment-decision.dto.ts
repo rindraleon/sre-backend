@@ -1,11 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import {
-  IsEnum,
-  IsOptional,
-  IsString,
-  Length,
-  ValidateIf,
-} from "class-validator";
+import { IsEnum, IsString, Length, ValidateIf } from "class-validator";
 import { PaymentStatus } from "../../database/enums";
 
 export class PaymentDecisionDto {
