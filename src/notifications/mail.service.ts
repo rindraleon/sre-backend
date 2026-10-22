@@ -3,77 +3,77 @@ import { ConfigService } from "@nestjs/config";
 import { createTransport, type Transporter } from "nodemailer";
 
 export interface OutgoingEmail {
-  destinataire: string;
-  nomDestinataire?: string;
-  /** Adresse à laquelle le destinataire peut répondre (validée avant envoi). */
+  recipient: string;
+  recipientName?: string;
+  /** Address the recipient can reply to (validated before sending). */
   replyTo?: string;
-  sujet: string;
-  texte: string;
+  subject: string;
+  text: string;
   html: string;
 }
 
-/** Jeton d'injection du service de courriel (remplaçable par un faux en test). */
+/** Injection token of the mail service (replaceable with a fake in tests). */
 export const MAIL_SERVICE = "MAIL_SERVICE";
 
 export interface MailSender {
-  envoyer(courriel: OutgoingEmail): Promise<void>;
+  send(email: OutgoingEmail): Promise<void>;
 }
 
-const MOTIF_COURRIEL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export function isValidEmail(adresse: string | null | undefined): boolean {
-  return Boolean(adresse && MOTIF_COURRIEL.test(adresse.trim()));
+export function isValidEmail(address: string | null | undefined): boolean {
+  return Boolean(address && EMAIL_PATTERN.test(address.trim()));
 }
 
-function echapperHtml(valeur: string): string {
-  return valeur
+function escapeHtml(value: string): string {
+  return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 }
 
-/** Modèle HTML simple, lisible sur mobile, sans pièce jointe ni donnée secrète. */
-export function buildEmailHtml(parametres: {
-  nomDestinataire?: string;
-  titre: string;
+/** Simple HTML template, readable on mobile, with no attachment or secret data. */
+export function buildEmailHtml(settings: {
+  recipientName?: string;
+  title: string;
   message: string;
-  lienApplication: string;
-  /** Libellé du lien d'action (par défaut : « Consulter mon espace SRE »). */
-  libelleLien?: string;
+  appLink: string;
+  /** Label of the action link (default: « Consulter mon espace SRE »). */
+  linkLabel?: string;
 }): string {
-  const bonjour = parametres.nomDestinataire
-    ? `Bonjour ${echapperHtml(parametres.nomDestinataire)},`
+  const bonjour = settings.recipientName
+    ? `Bonjour ${escapeHtml(settings.recipientName)},`
     : "Bonjour,";
   return `<!doctype html><html lang="fr"><body style="font-family:Arial,sans-serif;color:#18283c;line-height:1.55">
 <p>${bonjour}</p>
-<h1 style="font-size:18px">${echapperHtml(parametres.titre)}</h1>
-<p>${echapperHtml(parametres.message)}</p>
-<p><a href="${echapperHtml(parametres.lienApplication)}">${echapperHtml(parametres.libelleLien ?? "Consulter mon espace SRE")}</a></p>
+<h1 style="font-size:18px">${escapeHtml(settings.title)}</h1>
+<p>${escapeHtml(settings.message)}</p>
+<p><a href="${escapeHtml(settings.appLink)}">${escapeHtml(settings.linkLabel ?? "Consulter mon espace SRE")}</a></p>
 <p style="font-size:12px;color:#5b6b7a">Message automatique du portail SRE. Ne répondez pas à cet e-mail et ne transmettez jamais votre mot de passe.</p>
 </body></html>`;
 }
 
 /**
- * Envoi de courriels selon `MAIL_TRANSPORT` :
- * - `smtp` : SMTP réel via nodemailer (variables SMTP_HOST/PORT/USER/PASSWORD/FROM) ;
- * - `capture` : boîte de capture en mémoire (tests/développement, aucun envoi réel) ;
- * - autre/absent : non configuré -> erreur explicite, jamais d'envoi simulé comme réussi.
- * Aucun secret n'est journalisé.
+ * Sends e-mails according to `MAIL_TRANSPORT`:
+ * - `smtp`: real SMTP via nodemailer (SMTP_HOST/PORT/USER/PASSWORD/FROM variables);
+ * - `capture`: in-memory capture box (tests/development, no real send);
+ * - other/absent: not configured -> explicit error, never a fake successful send.
+ * No secret is ever logged.
  */
 @Injectable()
 export class MailService implements MailSender {
-  private readonly journal = new Logger(MailService.name);
-  private readonly transporteur?: Transporter;
-  /** Boîte de capture (transport `capture`) — consultable par les tests. */
-  readonly courrielsCaptures: OutgoingEmail[] = [];
+  private readonly activityLog = new Logger(MailService.name);
+  private readonly transporter?: Transporter;
+  /** Capture box (`capture` transport) — inspectable by tests. */
+  readonly capturedEmails: OutgoingEmail[] = [];
 
   constructor(private readonly configuration: ConfigService) {
     const mode = this.configuration
       .get<string>("MAIL_TRANSPORT", "")
       .toLowerCase();
     if (mode === "smtp") {
-      this.transporteur = createTransport({
+      this.transporter = createTransport({
         host: this.configuration.getOrThrow<string>("SMTP_HOST"),
         port: Number(this.configuration.get<string>("SMTP_PORT", "587")),
         secure: this.configuration.get<string>("SMTP_SECURE") === "true",
@@ -85,32 +85,32 @@ export class MailService implements MailSender {
     }
   }
 
-  async envoyer(courriel: OutgoingEmail): Promise<void> {
-    if (!isValidEmail(courriel.destinataire))
+  async send(email: OutgoingEmail): Promise<void> {
+    if (!isValidEmail(email.recipient))
       throw new Error("Adresse e-mail du destinataire absente ou invalide.");
-    if (courriel.replyTo && !isValidEmail(courriel.replyTo))
+    if (email.replyTo && !isValidEmail(email.replyTo))
       throw new Error("Adresse e-mail Reply-To absente ou invalide.");
     const mode = this.configuration
       .get<string>("MAIL_TRANSPORT", "")
       .toLowerCase();
     if (mode === "capture") {
-      this.courrielsCaptures.push(courriel);
-      this.journal.log(
-        `Courriel capturé (aucun envoi réel) : ${courriel.sujet}`,
+      this.capturedEmails.push(email);
+      this.activityLog.log(
+        `Courriel capturé (aucun envoi réel) : ${email.subject}`,
       );
       return;
     }
-    if (mode === "smtp" && this.transporteur) {
-      const expediteur =
+    if (mode === "smtp" && this.transporter) {
+      const sender =
         this.configuration.get<string>("MAIL_FROM") ??
         this.configuration.getOrThrow<string>("SMTP_USER");
-      await this.transporteur.sendMail({
-        from: expediteur,
-        to: courriel.destinataire,
-        ...(courriel.replyTo ? { replyTo: courriel.replyTo } : {}),
-        subject: courriel.sujet,
-        text: courriel.texte,
-        html: courriel.html,
+      await this.transporter.sendMail({
+        from: sender,
+        to: email.recipient,
+        ...(email.replyTo ? { replyTo: email.replyTo } : {}),
+        subject: email.subject,
+        text: email.text,
+        html: email.html,
       });
       return;
     }

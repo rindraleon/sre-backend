@@ -7,20 +7,20 @@ import {
 } from "./deadline-reminders.service";
 
 /**
- * Job planifié des rappels d'échéances : une fois par jour à 06:00 dans le
- * fuseau métier (Indian/Antananarivo par défaut, `FUSEAU_HORAIRE`).
- * - Activable/désactivable par `RAPPELS_ACTIFS=false` (désactivé en test).
- * - Aucun GET ni ouverture de page ne déclenche d'envoi.
- * - Relançable sans doublons : clé d'idempotence unique en base, donc deux
- *   instances concurrentes ne créent pas deux notifications.
+ * Scheduled deadline-reminder job: once a day at 06:00 in the
+ * business time zone (Indian/Antananarivo by default, `FUSEAU_HORAIRE`).
+ * - Can be toggled with `RAPPELS_ACTIFS=false` (disabled in tests).
+ * - No GET or page load ever triggers a send.
+ * - Re-runnable without duplicates: unique idempotency key in the database, so two
+ *   concurrent instances do not create two notifications.
  */
 @Injectable()
 export class DeadlineReminderJob {
-  private readonly journal = new Logger(DeadlineReminderJob.name);
-  private enCours = false;
+  private readonly activityLog = new Logger(DeadlineReminderJob.name);
+  private inProgress = false;
 
   constructor(
-    private readonly rappels: DeadlineReminderService,
+    private readonly reminders: DeadlineReminderService,
     private readonly configuration: ConfigService,
   ) {}
 
@@ -28,28 +28,28 @@ export class DeadlineReminderJob {
     name: "rappels-echeances-quotidien",
     timeZone: DEFAULT_TIMEZONE,
   })
-  async executer(): Promise<void> {
+  async execute(): Promise<void> {
     if (this.configuration.get<string>("RAPPELS_ACTIFS", "true") === "false")
       return;
     if (process.env.NODE_ENV === "test") return;
-    if (this.enCours) {
-      this.journal.warn(
+    if (this.inProgress) {
+      this.activityLog.warn(
         "Job de rappels déjà en cours sur cette instance : exécution ignorée.",
       );
       return;
     }
-    this.enCours = true;
+    this.inProgress = true;
     try {
-      const bilan = await this.rappels.traiter(new Date());
-      this.journal.log(
-        `Job rappels terminé (fuseau ${this.configuration.get<string>("FUSEAU_HORAIRE", DEFAULT_TIMEZONE)}) : ${bilan.notificationsCreees} créée(s), ${bilan.courrielsEnvoyes} courriel(s) envoyé(s), ${bilan.courrielsEchoues} échec(s).`,
+      const summary = await this.reminders.processReminders(new Date());
+      this.activityLog.log(
+        `Job rappels terminé (fuseau ${this.configuration.get<string>("FUSEAU_HORAIRE", DEFAULT_TIMEZONE)}) : ${summary.createdNotifications} créée(s), ${summary.sentEmails} courriel(s) envoyé(s), ${summary.failedEmails} échec(s).`,
       );
-    } catch (erreur) {
-      this.journal.error(
-        `Job de rappels en échec : ${erreur instanceof Error ? erreur.message : "erreur inconnue"}`,
+    } catch (error) {
+      this.activityLog.error(
+        `Job de rappels en échec : ${error instanceof Error ? error.message : "erreur inconnue"}`,
       );
     } finally {
-      this.enCours = false;
+      this.inProgress = false;
     }
   }
 }

@@ -11,39 +11,39 @@ import { HttpErrorFilter } from "./common/filters/http-error.filter";
 import { createValidationException } from "./common/validation/validation-errors";
 import { addApiAuthorExtension, createOpenApiConfiguration, isOpenApiEnabled } from "./docs";
 
-async function demarrer() {
+async function bootstrap() {
   const application = await NestFactory.create(AppModule, { bufferLogs: true });
   const configuration = application.get(ConfigService);
   const port = Number(configuration.get<string>("PORT", "3000"));
-  const origines = configuration
+  const origins = configuration
     .get<string>("CORS_ORIGINS", "http://localhost:5173")
     .split(",")
-    .map((origine) => origine.trim())
+    .map((origin) => origin.trim())
     .filter(Boolean);
 
   application.use(
-    (_requete: Request, reponse: Response, suivant: NextFunction) => {
-      const identifiantRequete = randomUUID();
-      reponse.locals.requestId = identifiantRequete;
-      reponse.setHeader("X-Request-ID", identifiantRequete);
-      suivant();
+    (_request: Request, response: Response, next: NextFunction) => {
+      const requestId = randomUUID();
+      response.locals.requestId = requestId;
+      response.setHeader("X-Request-ID", requestId);
+      next();
     },
   );
 
-  const entetesSecurite = helmet();
-  const entetesSwagger = helmet({ contentSecurityPolicy: false });
+  const securityHeaders = helmet();
+  const swaggerHeaders = helmet({ contentSecurityPolicy: false });
   application.use(
-    (requete: Request, reponse: Response, suivant: NextFunction) => {
-      const estDocumentation = requete.path.startsWith("/docs");
-      return (estDocumentation ? entetesSwagger : entetesSecurite)(
-        requete,
-        reponse,
-        suivant,
+    (request: Request, response: Response, next: NextFunction) => {
+      const isDocumentation = request.path.startsWith("/docs");
+      return (isDocumentation ? swaggerHeaders : securityHeaders)(
+        request,
+        response,
+        next,
       );
     },
   );
   application.enableCors({
-    origin: origines,
+    origin: origins,
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     exposedHeaders: ["X-Request-ID"],
@@ -63,7 +63,7 @@ async function demarrer() {
   const documentSwagger = addApiAuthorExtension(
     SwaggerModule.createDocument(application, createOpenApiConfiguration()),
   );
-  // L'interface et son export OpenAPI restent réservés aux environnements non productifs.
+  // The UI and its OpenAPI export stay restricted to non-production environments.
   if (isOpenApiEnabled(configuration.get<string>("NODE_ENV", "development"))) {
     SwaggerModule.setup("docs", application, documentSwagger, {
       jsonDocumentUrl: "docs-json",
@@ -82,4 +82,4 @@ async function demarrer() {
   console.log(`API SRE démarrée sur http://0.0.0.0:${port}`);
 }
 
-void demarrer();
+void bootstrap();

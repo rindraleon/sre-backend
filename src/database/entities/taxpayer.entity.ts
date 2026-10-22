@@ -24,12 +24,12 @@ export class TaxpayerEntity {
   @PrimaryGeneratedColumn("uuid")
   id!: string;
 
-  @OneToOne(() => UserEntity, (utilisateur) => utilisateur.contribuable, {
+  @OneToOne(() => UserEntity, (user) => user.taxpayer, {
     nullable: true,
     onDelete: "SET NULL",
   })
   @JoinColumn({ name: "utilisateur_id" })
-  utilisateur!: UserEntity | null;
+  user!: UserEntity | null;
 
   @Column({
     type: "enum",
@@ -38,11 +38,15 @@ export class TaxpayerEntity {
   })
   type!: TaxpayerType;
 
-  @Column({ type: "varchar", length: 120 })
-  nom!: string;
+  @Column({
+      name: "nom",
+    type: "varchar", length: 120 })
+  lastName!: string;
 
-  @Column({ type: "varchar", length: 120, nullable: true })
-  prenom!: string | null;
+  @Column({
+      name: "prenom",
+    type: "varchar", length: 120, nullable: true })
+  firstName!: string | null;
 
   @Column({
     name: "raison_sociale",
@@ -50,7 +54,7 @@ export class TaxpayerEntity {
     length: 180,
     nullable: true,
   })
-  raisonSociale!: string | null;
+  legalName!: string | null;
 
   @Column({
     name: "nom_commercial",
@@ -58,7 +62,7 @@ export class TaxpayerEntity {
     length: 180,
     nullable: true,
   })
-  nomCommercial!: string | null;
+  tradeName!: string | null;
 
   @Column({ type: "varchar", length: 40, nullable: true })
   nif!: string | null;
@@ -66,20 +70,28 @@ export class TaxpayerEntity {
   @Column({ type: "varchar", length: 40, nullable: true })
   stat!: string | null;
 
-  @Column({ type: "varchar", length: 220 })
-  adresse!: string;
+  @Column({
+      name: "adresse",
+    type: "varchar", length: 220 })
+  address!: string;
 
   @Column({ type: "varchar", length: 120 })
   region!: string;
 
-  @Column({ type: "varchar", length: 120 })
-  ville!: string;
+  @Column({
+      name: "ville",
+    type: "varchar", length: 120 })
+  city!: string;
 
-  @Column({ type: "varchar", length: 254 })
-  courriel!: string;
+  @Column({
+      name: "courriel",
+    type: "varchar", length: 254 })
+  email!: string;
 
-  @Column({ type: "varchar", length: 40 })
-  telephone!: string;
+  @Column({
+      name: "telephone",
+    type: "varchar", length: 40 })
+  phone!: string;
 
   @Column({
     name: "representant_legal",
@@ -87,10 +99,10 @@ export class TaxpayerEntity {
     length: 180,
     nullable: true,
   })
-  representantLegal!: string | null;
+  legalRepresentative!: string | null;
 
   @Column({ name: "nom_contact", type: "varchar", length: 120, nullable: true })
-  nomContact!: string | null;
+  contactLastName!: string | null;
 
   @Column({
     name: "prenom_contact",
@@ -98,7 +110,7 @@ export class TaxpayerEntity {
     length: 120,
     nullable: true,
   })
-  prenomContact!: string | null;
+  contactFirstName!: string | null;
 
   @Column({
     name: "fonction_contact",
@@ -106,14 +118,14 @@ export class TaxpayerEntity {
     length: 120,
     nullable: true,
   })
-  fonctionContact!: string | null;
+  contactRole!: string | null;
 
   @Column({ name: "date_creation_compte", type: "timestamptz" })
-  dateCreationCompte!: Date;
+  accountCreatedAt!: Date;
 
   @CreateDateColumn({ name: "cree_le", type: "timestamptz" })
-  creeLe!: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ name: "modifie_le", type: "timestamptz" })
-  modifieLe!: Date;
+  updatedAt!: Date;
 }

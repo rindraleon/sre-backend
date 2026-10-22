@@ -13,7 +13,7 @@ export class PaymentDecisionDto {
     description: "Motif obligatoire pour un rejet ou une demande de correction; omis pour CONFIRME.",
   })
   @ValidateIf(
-    (donnees: PaymentDecisionDto) => donnees.statut !== PaymentStatus.CONFIRME,
+    (data: PaymentDecisionDto) => data.statut !== PaymentStatus.CONFIRMED,
   )
   @IsString({ message: "Ce champ doit être une chaîne de caractères." })
   @Length(5, 1500, {

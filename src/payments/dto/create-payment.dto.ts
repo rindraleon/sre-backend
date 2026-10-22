@@ -21,7 +21,7 @@ export class CreatePaymentDto {
 
   @ApiPropertyOptional({ enum: PaymentOperator, description: "Opérateur déclaré, requis pour MOBILE_MONEY." })
   @ValidateIf(
-    (donnees: CreatePaymentDto) => donnees.mode === PaymentMethod.MOBILE_MONEY,
+    (data: CreatePaymentDto) => data.mode === PaymentMethod.MOBILE_MONEY,
   )
   @IsEnum(PaymentOperator, {
     message: "La valeur sélectionnée est invalide.",
@@ -30,7 +30,7 @@ export class CreatePaymentDto {
 
   @ApiPropertyOptional({ minLength: 7, maxLength: 40, description: "Téléphone utilisé, requis pour MOBILE_MONEY." })
   @ValidateIf(
-    (donnees: CreatePaymentDto) => donnees.mode === PaymentMethod.MOBILE_MONEY,
+    (data: CreatePaymentDto) => data.mode === PaymentMethod.MOBILE_MONEY,
   )
   @IsString({ message: "Ce champ doit être une chaîne de caractères." })
   @Length(7, 40, {
@@ -41,8 +41,8 @@ export class CreatePaymentDto {
 
   @ApiPropertyOptional({ minLength: 2, maxLength: 140, description: "Banque ou canal saisi par l'utilisateur; aucune intégration bancaire n'est effectuée." })
   @ValidateIf(
-    (donnees: CreatePaymentDto) =>
-      donnees.mode === PaymentMethod.VIREMENT_BANCAIRE,
+    (data: CreatePaymentDto) =>
+      data.mode === PaymentMethod.BANK_TRANSFER,
   )
   @IsString({ message: "Ce champ doit être une chaîne de caractères." })
   @Length(2, 140, {

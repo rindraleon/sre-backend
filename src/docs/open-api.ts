@@ -7,7 +7,7 @@ export function isOpenApiEnabled(environnement: string) {
   return environnement !== "production";
 }
 
-/** Métadonnées OpenAPI centralisées pour l'interface Swagger et l'export JSON. */
+/** Centralized OpenAPI metadata for the Swagger UI and the JSON export. */
 export function createOpenApiConfiguration() {
   return new DocumentBuilder()
     .setTitle("API SRE — Haute Matsiatra")
@@ -19,7 +19,7 @@ export function createOpenApiConfiguration() {
     .build();
 }
 
-/** Ajoute une extension OpenAPI non intrusive, exportée avec la spécification. */
+/** Adds a non-intrusive OpenAPI extension, exported with the specification. */
 export function addApiAuthorExtension(document: OpenAPIObject) {
   return {
     ...document,

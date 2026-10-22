@@ -28,64 +28,64 @@ import { PaymentDecisionDto } from "./dto/payment-decision.dto";
 export class PaymentsService {
   constructor(
     @InjectRepository(PaymentEntity)
-    private readonly paiements: Repository<PaymentEntity>,
-    private readonly sourceDeDonnees: DataSource,
+    private readonly payments: Repository<PaymentEntity>,
+    private readonly dataSource: DataSource,
     private readonly documents: DocumentsService,
   ) {}
 
-  async creerDeclaration(
-    utilisateur: AuthenticatedUser,
-    donnees: CreatePaymentDto,
+  async createDeclaration(
+    user: AuthenticatedUser,
+    data: CreatePaymentDto,
   ) {
     if (
-      utilisateur.role !== AccountRole.CLIENT ||
-      !utilisateur.contribuableId
+      user.role !== AccountRole.CLIENT ||
+      !user.taxpayerId
     ) {
       throw new ForbiddenException(
         "Un compte client lié à un contribuable est nécessaire.",
       );
     }
 
-    const idPaiement = await this.sourceDeDonnees.transaction(
-      async (gestionnaire) => {
-        const depotObligations = gestionnaire.getRepository(ObligationEntity);
-        const obligation = await depotObligations
+    const paymentId = await this.dataSource.transaction(
+      async (manager) => {
+        const obligationsRepository = manager.getRepository(ObligationEntity);
+        const obligation = await obligationsRepository
           .createQueryBuilder("obligation")
-          .leftJoinAndSelect("obligation.contribuable", "contribuable")
-          .leftJoinAndSelect("obligation.typeImpot", "typeImpot")
-          .where("obligation.id = :idObligation", {
-            idObligation: donnees.obligationId,
+          .leftJoinAndSelect("obligation.taxpayer", "taxpayer")
+          .leftJoinAndSelect("obligation.taxType", "taxType")
+          .where("obligation.id = :obligationId", {
+            obligationId: data.obligationId,
           })
-          .andWhere("contribuable.id = :idContribuable", {
-            idContribuable: utilisateur.contribuableId,
+          .andWhere("taxpayer.id = :taxpayerId", {
+            taxpayerId: user.taxpayerId,
           })
           .setLock("pessimistic_write", undefined, ["obligation"])
           .getOne();
 
         if (!obligation)
           throw new NotFoundException("Obligation introuvable pour ce compte.");
-        const statutsEligibles = [
-          ObligationStatus.A_PAYER,
-          ObligationStatus.EN_RETARD,
-          ObligationStatus.REJETE,
-          ObligationStatus.CORRECTION_DEMANDEE,
+        const eligibleStatuses = [
+          ObligationStatus.TO_PAY,
+          ObligationStatus.OVERDUE,
+          ObligationStatus.REJECTED,
+          ObligationStatus.CORRECTION_REQUESTED,
         ];
-        if (!statutsEligibles.includes(obligation.statut)) {
+        if (!eligibleStatuses.includes(obligation.status)) {
           throw new ConflictException(
             "Cette obligation possède déjà une déclaration en cours ou est réglée.",
           );
         }
         if (
-          donnees.mode === PaymentMethod.MOBILE_MONEY &&
-          (!donnees.operateur || !donnees.telephoneUtilise)
+          data.mode === PaymentMethod.MOBILE_MONEY &&
+          (!data.operateur || !data.telephoneUtilise)
         ) {
           throw new BadRequestException(
             "L'opérateur et le numéro sont requis pour une déclaration mobile-money.",
           );
         }
         if (
-          donnees.mode === PaymentMethod.VIREMENT_BANCAIRE &&
-          !donnees.banqueOuCanal?.trim()
+          data.mode === PaymentMethod.BANK_TRANSFER &&
+          !data.banqueOuCanal?.trim()
         ) {
           throw new BadRequestException(
             "Le canal déclaré est requis pour une déclaration de virement.",
@@ -96,311 +96,311 @@ export class PaymentsService {
           .replaceAll("-", "")
           .slice(0, 12)
           .toUpperCase();
-        const referenceInterne = `PAY-${new Date().getFullYear()}-${referenceUnique}`;
-        const depotPaiements = gestionnaire.getRepository(PaymentEntity);
-        const paiement = depotPaiements.create({
-          referenceInterne,
-          contribuable: obligation.contribuable,
+        const internalReference = `PAY-${new Date().getFullYear()}-${referenceUnique}`;
+        const paymentsRepository = manager.getRepository(PaymentEntity);
+        const payment = paymentsRepository.create({
+          internalReference,
+          taxpayer: obligation.taxpayer,
           obligation,
-          montant: obligation.montant,
-          devise: "MGA",
-          mode: donnees.mode,
-          operateur:
-            donnees.mode === PaymentMethod.MOBILE_MONEY
-              ? (donnees.operateur ?? null)
+          amount: obligation.amount,
+          currency: "MGA",
+          mode: data.mode,
+          operator:
+            data.mode === PaymentMethod.MOBILE_MONEY
+              ? (data.operateur ?? null)
               : null,
-          telephoneUtilise:
-            donnees.mode === PaymentMethod.MOBILE_MONEY
-              ? (donnees.telephoneUtilise?.trim() ?? null)
+          usedPhone:
+            data.mode === PaymentMethod.MOBILE_MONEY
+              ? (data.telephoneUtilise?.trim() ?? null)
               : null,
-          banqueOuCanal:
-            donnees.mode === PaymentMethod.VIREMENT_BANCAIRE
-              ? (donnees.banqueOuCanal?.trim() ?? null)
+          bankOrChannel:
+            data.mode === PaymentMethod.BANK_TRANSFER
+              ? (data.banqueOuCanal?.trim() ?? null)
               : null,
-          titulairePayeur: donnees.titulairePayeur?.trim() || null,
-          referenceTransaction: donnees.referenceTransaction.trim(),
-          dateTransaction: donnees.dateTransaction.slice(0, 10),
-          justificatifNom: this.nettoyerNomJustificatif(
-            donnees.justificatifNom,
+          payerName: data.titulairePayeur?.trim() || null,
+          transactionReference: data.referenceTransaction.trim(),
+          transactionDate: data.dateTransaction.slice(0, 10),
+          supportingDocumentName: this.sanitizeSupportingDocumentName(
+            data.justificatifNom,
           ),
-          statut: PaymentStatus.EN_VERIFICATION,
-          valideLe: null,
-          validePar: null,
-          motifDecision: null,
+          status: PaymentStatus.UNDER_REVIEW,
+          validatedAt: null,
+          validatedBy: null,
+          decisionReason: null,
         });
-        const paiementEnregistre = await depotPaiements.save(paiement);
+        const savedPayment = await paymentsRepository.save(payment);
 
-        obligation.statut = ObligationStatus.EN_VERIFICATION;
-        await depotObligations.save(obligation);
+        obligation.status = ObligationStatus.UNDER_REVIEW;
+        await obligationsRepository.save(obligation);
 
-        const depotEvenements = gestionnaire.getRepository(PaymentEventEntity);
-        const evenement = depotEvenements.create({
-          paiement: paiementEnregistre,
-          statut: PaymentStatus.EN_VERIFICATION,
-          libelle: "Déclaration soumise — paiement non vérifié",
-          acteur: gestionnaire
+        const paymentEventsRepository = manager.getRepository(PaymentEventEntity);
+        const event = paymentEventsRepository.create({
+          payment: savedPayment,
+          status: PaymentStatus.UNDER_REVIEW,
+          label: "Déclaration soumise — paiement non vérifié",
+          actor: manager
             .getRepository(UserEntity)
-            .create({ id: utilisateur.id }),
-          nomActeur: utilisateur.nom,
-          motif: null,
+            .create({ id: user.id }),
+          actorName: user.name,
+          reason: null,
         });
-        await depotEvenements.save(evenement);
-        await this.documents.creerAccuse(gestionnaire, {
-          ...paiementEnregistre,
-          contribuable: obligation.contribuable,
+        await paymentEventsRepository.save(event);
+        await this.documents.createAcknowledgment(manager, {
+          ...savedPayment,
+          taxpayer: obligation.taxpayer,
           obligation,
         });
-        return paiementEnregistre.id;
+        return savedPayment.id;
       },
     );
 
-    return this.obtenirUne(idPaiement, utilisateur);
+    return this.getOne(paymentId, user);
   }
 
-  async listerMesPaiements(utilisateur: AuthenticatedUser) {
-    if (!utilisateur.contribuableId) return [];
-    const lignes = await this.chargerRequete()
-      .where("contribuable.id = :idContribuable", {
-        idContribuable: utilisateur.contribuableId,
+  async listMyPayments(user: AuthenticatedUser) {
+    if (!user.taxpayerId) return [];
+    const rows = await this.buildQuery()
+      .where("taxpayer.id = :taxpayerId", {
+        taxpayerId: user.taxpayerId,
       })
-      .andWhere("contribuable.region = :region", { region: SRE_REGION })
-      .orderBy("paiement.soumisLe", "DESC")
+      .andWhere("taxpayer.region = :region", { region: SRE_REGION })
+      .orderBy("payment.submittedAt", "DESC")
       .getMany();
-    return lignes.map((paiement) => this.vuePaiement(paiement));
+    return rows.map((payment) => this.toPaymentView(payment));
   }
 
-  async listerPourAdministration(
-    statut?: PaymentStatus,
+  async listForAdministration(
+    status?: PaymentStatus,
     page = 1,
-    parPage = 25,
+    perPage = 25,
   ) {
-    const numeroPage = Math.max(1, Math.floor(page) || 1);
-    const taillePage = Math.min(100, Math.max(1, Math.floor(parPage) || 25));
-    const requete = this.chargerRequete()
-      .where("contribuable.region = :region", { region: SRE_REGION })
-      .orderBy("paiement.soumisLe", "DESC");
-    if (statut) requete.andWhere("paiement.statut = :statut", { statut });
-    const [lignes, total] = await requete
-      .skip((numeroPage - 1) * taillePage)
-      .take(taillePage)
+    const pageNumber = Math.max(1, Math.floor(page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Math.floor(perPage) || 25));
+    const request = this.buildQuery()
+      .where("taxpayer.region = :region", { region: SRE_REGION })
+      .orderBy("payment.submittedAt", "DESC");
+    if (status) request.andWhere("payment.status = :status", { status: status });
+    const [rows, total] = await request
+      .skip((pageNumber - 1) * pageSize)
+      .take(pageSize)
       .getManyAndCount();
     return {
-      donnees: lignes.map((paiement) => this.vuePaiement(paiement)),
+      donnees: rows.map((payment) => this.toPaymentView(payment)),
       total,
-      page: numeroPage,
-      parPage: taillePage,
+      page: pageNumber,
+      parPage: pageSize,
     };
   }
 
-  async obtenirUne(id: string, utilisateur: AuthenticatedUser) {
-    const requete = this.chargerRequete()
-      .where("paiement.id = :idPaiement", { idPaiement: id })
-      .andWhere("contribuable.region = :region", { region: SRE_REGION });
-    if (utilisateur.role !== AccountRole.ADMIN) {
-      if (!utilisateur.contribuableId)
+  async getOne(id: string, user: AuthenticatedUser) {
+    const request = this.buildQuery()
+      .where("payment.id = :paymentId", { paymentId: id })
+      .andWhere("taxpayer.region = :region", { region: SRE_REGION });
+    if (user.role !== AccountRole.ADMIN) {
+      if (!user.taxpayerId)
         throw new NotFoundException("Déclaration introuvable.");
-      requete.andWhere("contribuable.id = :idContribuable", {
-        idContribuable: utilisateur.contribuableId,
+      request.andWhere("taxpayer.id = :taxpayerId", {
+        taxpayerId: user.taxpayerId,
       });
     }
-    const paiement = await requete.getOne();
-    if (!paiement) throw new NotFoundException("Déclaration introuvable.");
-    return this.vuePaiement(paiement);
+    const payment = await request.getOne();
+    if (!payment) throw new NotFoundException("Déclaration introuvable.");
+    return this.toPaymentView(payment);
   }
 
-  async decider(
+  async decide(
     id: string,
-    utilisateur: AuthenticatedUser,
-    donnees: PaymentDecisionDto,
+    user: AuthenticatedUser,
+    data: PaymentDecisionDto,
   ) {
-    if (utilisateur.role !== AccountRole.ADMIN)
+    if (user.role !== AccountRole.ADMIN)
       throw new ForbiddenException("Décision réservée à l'administration.");
-    const statut = donnees.statut;
+    const status = data.statut;
     if (
       ![
-        PaymentStatus.CONFIRME,
-        PaymentStatus.REJETE,
-        PaymentStatus.CORRECTION_DEMANDEE,
-      ].includes(statut)
+        PaymentStatus.CONFIRMED,
+        PaymentStatus.REJECTED,
+        PaymentStatus.CORRECTION_REQUESTED,
+      ].includes(status)
     ) {
       throw new BadRequestException("Statut de décision invalide.");
     }
     if (
-      statut !== PaymentStatus.CONFIRME &&
-      (!donnees.motif || donnees.motif.trim().length < 5)
+      status !== PaymentStatus.CONFIRMED &&
+      (!data.motif || data.motif.trim().length < 5)
     ) {
       throw new BadRequestException(
         "Un motif d'au moins 5 caractères est requis pour cette décision.",
       );
     }
 
-    await this.sourceDeDonnees.transaction(async (gestionnaire) => {
-      const depotPaiements = gestionnaire.getRepository(PaymentEntity);
-      const verrou = await depotPaiements
-        .createQueryBuilder("paiement")
-        .where("paiement.id = :idPaiement", { idPaiement: id })
+    await this.dataSource.transaction(async (manager) => {
+      const paymentsRepository = manager.getRepository(PaymentEntity);
+      const lock = await paymentsRepository
+        .createQueryBuilder("payment")
+        .where("payment.id = :paymentId", { paymentId: id })
         .setLock("pessimistic_write")
         .getOne();
-      if (!verrou) throw new NotFoundException("Déclaration introuvable.");
-      if (verrou.statut !== PaymentStatus.EN_VERIFICATION) {
+      if (!lock) throw new NotFoundException("Déclaration introuvable.");
+      if (lock.status !== PaymentStatus.UNDER_REVIEW) {
         throw new ConflictException(
           "Une décision a déjà été enregistrée pour cette déclaration.",
         );
       }
 
-      const paiement = await depotPaiements.findOne({
-        where: { id, contribuable: { region: SRE_REGION } },
-        relations: { contribuable: true, obligation: { typeImpot: true } },
+      const payment = await paymentsRepository.findOne({
+        where: { id, taxpayer: { region: SRE_REGION } },
+        relations: { taxpayer: true, obligation: { taxType: true } },
       });
-      if (!paiement)
+      if (!payment)
         throw new NotFoundException(
           "Déclaration introuvable dans le périmètre du service.",
         );
-      const depotObligations = gestionnaire.getRepository(ObligationEntity);
-      const obligation = await depotObligations
+      const obligationsRepository = manager.getRepository(ObligationEntity);
+      const obligation = await obligationsRepository
         .createQueryBuilder("obligation")
-        .where("obligation.id = :idObligation", {
-          idObligation: paiement.obligation.id,
+        .where("obligation.id = :obligationId", {
+          obligationId: payment.obligation.id,
         })
         .setLock("pessimistic_write")
         .getOne();
       if (!obligation)
         throw new NotFoundException("Obligation liée introuvable.");
 
-      const administrateur = gestionnaire
+      const administrator = manager
         .getRepository(UserEntity)
-        .create({ id: utilisateur.id });
+        .create({ id: user.id });
       const dateDecision = new Date();
-      const motif = donnees.motif?.trim() || null;
-      paiement.statut = statut;
-      paiement.valideLe =
-        statut === PaymentStatus.CONFIRME ? dateDecision : null;
-      paiement.validePar = administrateur;
-      paiement.motifDecision = motif;
-      await depotPaiements.save(paiement);
+      const reason = data.motif?.trim() || null;
+      payment.status = status;
+      payment.validatedAt =
+        status === PaymentStatus.CONFIRMED ? dateDecision : null;
+      payment.validatedBy = administrator;
+      payment.decisionReason = reason;
+      await paymentsRepository.save(payment);
 
-      obligation.statut =
-        statut === PaymentStatus.CONFIRME
-          ? ObligationStatus.PAYE
-          : statut === PaymentStatus.REJETE
-            ? ObligationStatus.REJETE
-            : ObligationStatus.CORRECTION_DEMANDEE;
-      await depotObligations.save(obligation);
+      obligation.status =
+        status === PaymentStatus.CONFIRMED
+          ? ObligationStatus.PAID
+          : status === PaymentStatus.REJECTED
+            ? ObligationStatus.REJECTED
+            : ObligationStatus.CORRECTION_REQUESTED;
+      await obligationsRepository.save(obligation);
 
-      const libelle =
-        statut === PaymentStatus.CONFIRME
+      const label =
+        status === PaymentStatus.CONFIRMED
           ? "Déclaration confirmée par une décision administrative — hors vérification bancaire"
-          : statut === PaymentStatus.REJETE
+          : status === PaymentStatus.REJECTED
             ? "Déclaration rejetée"
             : "Correction demandée";
-      const evenement = gestionnaire.getRepository(PaymentEventEntity).create({
-        paiement,
-        statut,
-        libelle,
-        acteur: administrateur,
-        nomActeur: utilisateur.nom,
-        motif,
-        creeLe: dateDecision,
+      const event = manager.getRepository(PaymentEventEntity).create({
+        payment,
+        status,
+        label,
+        actor: administrator,
+        actorName: user.name,
+        reason,
+        createdAt: dateDecision,
       });
-      await gestionnaire.getRepository(PaymentEventEntity).save(evenement);
+      await manager.getRepository(PaymentEventEntity).save(event);
 
-      if (statut === PaymentStatus.CONFIRME) {
-        await this.documents.creerRecuInterne(
-          gestionnaire,
-          paiement,
-          administrateur,
+      if (status === PaymentStatus.CONFIRMED) {
+        await this.documents.createInternalReceipt(
+          manager,
+          payment,
+          administrator,
         );
       }
     });
 
-    return this.obtenirUne(id, utilisateur);
+    return this.getOne(id, user);
   }
 
-  private chargerRequete() {
-    return this.paiements
-      .createQueryBuilder("paiement")
-      .leftJoinAndSelect("paiement.contribuable", "contribuable")
-      .leftJoinAndSelect("paiement.obligation", "obligation")
-      .leftJoinAndSelect("obligation.typeImpot", "typeImpot")
-      .leftJoinAndSelect("paiement.historique", "historique")
-      .leftJoinAndSelect("paiement.documents", "documents");
+  private buildQuery() {
+    return this.payments
+      .createQueryBuilder("payment")
+      .leftJoinAndSelect("payment.taxpayer", "taxpayer")
+      .leftJoinAndSelect("payment.obligation", "obligation")
+      .leftJoinAndSelect("obligation.taxType", "taxType")
+      .leftJoinAndSelect("payment.history", "history")
+      .leftJoinAndSelect("payment.documents", "documents");
   }
 
-  private vuePaiement(paiement: PaymentEntity) {
+  private toPaymentView(payment: PaymentEntity) {
     return {
-      id: paiement.id,
-      referenceInterne: paiement.referenceInterne,
-      contribuableId: paiement.contribuable?.id,
-      contribuable: paiement.contribuable
+      id: payment.id,
+      referenceInterne: payment.internalReference,
+      contribuableId: payment.taxpayer?.id,
+      contribuable: payment.taxpayer
         ? {
-            id: paiement.contribuable.id,
-            nom: paiement.contribuable.nom,
-            prenom: paiement.contribuable.prenom,
-            raisonSociale: paiement.contribuable.raisonSociale,
-            nif: paiement.contribuable.nif,
-            courriel: paiement.contribuable.courriel,
+            id: payment.taxpayer.id,
+            nom: payment.taxpayer.lastName,
+            prenom: payment.taxpayer.firstName,
+            raisonSociale: payment.taxpayer.legalName,
+            nif: payment.taxpayer.nif,
+            courriel: payment.taxpayer.email,
           }
         : undefined,
-      obligationId: paiement.obligation?.id,
-      typeImpotId: paiement.obligation?.typeImpot?.id,
-      typeImpotNom: paiement.obligation?.typeImpot?.nom,
-      referenceFiscale: paiement.obligation?.referenceFiscale,
-      periode: paiement.obligation?.periode,
-      montant: Number(paiement.montant),
-      devise: paiement.devise,
-      mode: paiement.mode,
-      operateur: paiement.operateur,
-      telephoneUtilise: paiement.telephoneUtilise,
-      banqueOuCanal: paiement.banqueOuCanal,
-      titulairePayeur: paiement.titulairePayeur,
-      referenceTransaction: paiement.referenceTransaction,
-      dateTransaction: paiement.dateTransaction,
-      justificatifNom: paiement.justificatifNom,
-      statut: paiement.statut,
-      soumisLe: paiement.soumisLe,
-      valideLe: paiement.valideLe,
-      validePar: paiement.validePar?.nom,
-      motifRejet: paiement.motifDecision,
-      historique: [...(paiement.historique ?? [])]
-        .sort((a, b) => a.creeLe.getTime() - b.creeLe.getTime())
-        .map((evenement) => ({
-          statut: evenement.statut,
-          libelle: evenement.libelle,
-          date: evenement.creeLe,
-          acteur: evenement.nomActeur,
-          motif: evenement.motif,
+      obligationId: payment.obligation?.id,
+      typeImpotId: payment.obligation?.taxType?.id,
+      typeImpotNom: payment.obligation?.taxType?.name,
+      referenceFiscale: payment.obligation?.taxReference,
+      periode: payment.obligation?.period,
+      montant: Number(payment.amount),
+      devise: payment.currency,
+      mode: payment.mode,
+      operateur: payment.operator,
+      telephoneUtilise: payment.usedPhone,
+      banqueOuCanal: payment.bankOrChannel,
+      titulairePayeur: payment.payerName,
+      referenceTransaction: payment.transactionReference,
+      dateTransaction: payment.transactionDate,
+      justificatifNom: payment.supportingDocumentName,
+      statut: payment.status,
+      soumisLe: payment.submittedAt,
+      valideLe: payment.validatedAt,
+      validePar: payment.validatedBy?.name,
+      motifRejet: payment.decisionReason,
+      historique: [...(payment.history ?? [])]
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+        .map((event) => ({
+          statut: event.status,
+          libelle: event.label,
+          date: event.createdAt,
+          acteur: event.actorName,
+          motif: event.reason,
         })),
-      documents: [...(paiement.documents ?? [])]
-        .filter((document) => document.statut === "VALIDE")
-        .sort((a, b) => a.emisLe.getTime() - b.emisLe.getTime())
+      documents: [...(payment.documents ?? [])]
+        .filter((document) => document.status === "VALIDE")
+        .sort((a, b) => a.issuedAt.getTime() - b.issuedAt.getTime())
         .map((document) => ({
           id: document.id,
-          numero: document.numero,
+          numero: document.number,
           type: document.type,
-          emisLe: document.emisLe,
-          montant: Number(document.montant),
-          devise: document.devise,
-          statut: document.statut,
-          contribuableId: document.contribuable?.id,
-          referencePaiement: paiement.referenceInterne,
-          typeImpotNom: paiement.obligation?.typeImpot?.nom,
-          periode: paiement.obligation?.periode,
-          referenceTransactionDeclaree: paiement.referenceTransaction,
-          modeDeclare: paiement.mode,
-          emetteur: document.emetteur,
+          emisLe: document.issuedAt,
+          montant: Number(document.amount),
+          devise: document.currency,
+          statut: document.status,
+          contribuableId: document.taxpayer?.id,
+          referencePaiement: payment.internalReference,
+          typeImpotNom: payment.obligation?.taxType?.name,
+          periode: payment.obligation?.period,
+          referenceTransactionDeclaree: payment.transactionReference,
+          modeDeclare: payment.mode,
+          emetteur: document.issuer,
           mention: document.mention,
-          emisPar: document.emisPar?.nom,
+          emisPar: document.issuedBy?.name,
           lienPdf: `/documents/${document.id}/pdf`,
         })),
     };
   }
 
-  private nettoyerNomJustificatif(nom?: string) {
-    if (!nom) return null;
-    const nettoye = nom
+  private sanitizeSupportingDocumentName(name?: string) {
+    if (!name) return null;
+    const cleaned = name
       .replace(/[\\/]/g, "_")
       .replace(/[\u0000-\u001f]/g, "")
       .trim();
-    return nettoye.slice(0, 200) || null;
+    return cleaned.slice(0, 200) || null;
   }
 }

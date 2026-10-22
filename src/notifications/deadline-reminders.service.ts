@@ -16,161 +16,161 @@ import {
 } from "./mail.service";
 
 /**
- * Politique de rappels (paramètres initiaux, PAS des règles fiscales
- * officielles) : jours avant échéance et jours de retard, configurables par
- * `RAPPELS_JOURS_AVANT` / `RAPPELS_JOURS_RETARD` (listes séparées par virgule).
- * Toute évolution relève d'un administrateur via la configuration, jamais de
- * dates légales codées en dur.
+ * Reminder policy (initial parameters, NOT official tax rules):
+ * days before due date and days overdue, configurable via
+ * `RAPPELS_JOURS_AVANT` / `RAPPELS_JOURS_RETARD` (comma-separated lists).
+ * Any change is an administrator's through configuration, never
+ * hard-coded legal dates.
  */
 export interface ReminderPolicy {
-  joursAvant: number[];
-  joursRetard: number[];
-  fuseauHoraire: string;
-  tentativesCourrielMax: number;
+  daysBefore: number[];
+  daysOverdue: number[];
+  timeZone: string;
+  maxEmailAttempts: number;
 }
 
 export const DEFAULT_TIMEZONE = "Indian/Antananarivo";
 
 /**
- * Statuts pour lesquels un rappel est admissible : l'obligation n'est ni
- * réglée (PAYE), ni en attente de décision sur une déclaration déposée
- * (PAIEMENT_EN_COURS / EN_VERIFICATION — un paiement déclaré n'est jamais
- * présenté comme confirmé, mais on ne relance pas pendant la vérification).
- * REJETE / CORRECTION_DEMANDEE redeviennent dus après décision défavorable.
+ * Statuses eligible for a reminder: the obligation is neither
+ * settled (PAYE) nor awaiting a decision on a filed declaration
+ * (PAIEMENT_EN_COURS / EN_VERIFICATION — a declared payment is never
+ * presented as confirmed, but no reminder is sent during review).
+ * REJETE / CORRECTION_DEMANDEE become due again after an unfavorable decision.
  */
 export const REMINDER_ELIGIBLE_STATUSES: ObligationStatus[] = [
-  ObligationStatus.A_PAYER,
-  ObligationStatus.EN_RETARD,
-  ObligationStatus.REJETE,
-  ObligationStatus.CORRECTION_DEMANDEE,
+  ObligationStatus.TO_PAY,
+  ObligationStatus.OVERDUE,
+  ObligationStatus.REJECTED,
+  ObligationStatus.CORRECTION_REQUESTED,
 ];
 
-/** Date civile (année/mois/jour) d'un instant dans un fuseau donné. */
+/** Civil date (year/month/day) of an instant in a given time zone. */
 export function civilDateInTimezone(
   instant: Date,
-  fuseauHoraire: string,
-): { annee: number; mois: number; jour: number } {
-  const parties = new Intl.DateTimeFormat("en-CA", {
-    timeZone: fuseauHoraire,
+  timeZone: string,
+): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).formatToParts(instant);
-  const lire = (type: string) =>
-    Number(parties.find((partie) => partie.type === type)?.value ?? "0");
-  return { annee: lire("year"), mois: lire("month"), jour: lire("day") };
+  const read = (type: string) =>
+    Number(parts.find((part) => part.type === type)?.value ?? "0");
+  return { year: read("year"), month: read("month"), day: read("day") };
 }
 
 /**
- * Nombre de jours civils entre « aujourd'hui » (dans le fuseau métier) et la
- * date d'échéance `AAAA-MM-JJ` stockée en base. Positif = à venir,
- * 0 = aujourd'hui, négatif = dépassée. Travailler en dates civiles évite le
- * décalage d'un jour autour de minuit entre UTC et le fuseau local.
+ * Number of civil days between "today" (in the business time zone) and the
+ * due date `YYYY-MM-DD` stored in the database. Positive = upcoming,
+ * 0 = today, negative = past. Working with civil dates avoids the
+ * one-day shift around midnight between UTC and the local time zone.
  */
 export function daysUntilDeadline(
-  echeance: string,
-  maintenant: Date,
-  fuseauHoraire: string,
+  dueDate: string,
+  now: Date,
+  timeZone: string,
 ): number {
-  const [annee, mois, jour] = echeance.slice(0, 10).split("-").map(Number);
-  const aujourdHui = civilDateInTimezone(maintenant, fuseauHoraire);
-  const msJour = 86_400_000;
-  const cible = Date.UTC(annee, (mois ?? 1) - 1, jour ?? 1);
+  const [year, month, day] = dueDate.slice(0, 10).split("-").map(Number);
+  const aujourdHui = civilDateInTimezone(now, timeZone);
+  const msPerDay = 86_400_000;
+  const target = Date.UTC(year, (month ?? 1) - 1, day ?? 1);
   const reference = Date.UTC(
-    aujourdHui.annee,
-    aujourdHui.mois - 1,
-    aujourdHui.jour,
+    aujourdHui.year,
+    aujourdHui.month - 1,
+    aujourdHui.day,
   );
-  return Math.round((cible - reference) / msJour);
+  return Math.round((target - reference) / msPerDay);
 }
 
 /** Type de rappel applicable aujourd'hui, ou `null` si aucun. */
 export function determineReminderType(
-  joursRestants: number,
-  politique: ReminderPolicy,
+  remainingDays: number,
+  policy: ReminderPolicy,
 ): string | null {
-  if (joursRestants > 0)
-    return politique.joursAvant.includes(joursRestants)
-      ? `AVANT_${joursRestants}`
+  if (remainingDays > 0)
+    return policy.daysBefore.includes(remainingDays)
+      ? `AVANT_${remainingDays}`
       : null;
-  if (joursRestants === 0)
-    return politique.joursAvant.includes(0) ? "JOUR_J" : null;
-  const retard = Math.abs(joursRestants);
-  return politique.joursRetard.includes(retard) ? `RETARD_${retard}` : null;
+  if (remainingDays === 0)
+    return policy.daysBefore.includes(0) ? "JOUR_J" : null;
+  const overdue = Math.abs(remainingDays);
+  return policy.daysOverdue.includes(overdue) ? `RETARD_${overdue}` : null;
 }
 
 export function reminderContent(
-  typeRappel: string,
-  libelleObligation: string,
-  echeance: string,
-): { titre: string; message: string } {
-  const date = echeance.slice(0, 10);
-  if (typeRappel === "JOUR_J")
+  reminderType: string,
+  labelObligation: string,
+  dueDate: string,
+): { title: string; message: string } {
+  const date = dueDate.slice(0, 10);
+  if (reminderType === "JOUR_J")
     return {
-      titre: "Échéance fiscale aujourd'hui",
-      message: `La date limite indiquée pour ${libelleObligation} est aujourd'hui, ${date}. Consultez votre dossier pour vérifier son statut.`,
+      title: "Échéance fiscale aujourd'hui",
+      message: `La date limite indiquée pour ${labelObligation} est aujourd'hui, ${date}. Consultez votre dossier pour vérifier son statut.`,
     };
-  if (typeRappel.startsWith("RETARD"))
+  if (reminderType.startsWith("RETARD"))
     return {
-      titre: "Échéance fiscale dépassée",
-      message: `D'après le statut actuel de votre dossier, l'échéance ${libelleObligation} du ${date} n'est pas marquée comme réglée. Consultez votre espace pour vérifier la situation.`,
+      title: "Échéance fiscale dépassée",
+      message: `D'après le statut actuel de votre dossier, l'échéance ${labelObligation} du ${date} n'est pas marquée comme réglée. Consultez votre espace pour vérifier la situation.`,
     };
   return {
-    titre: "Échéance fiscale à venir",
-    message: `Votre échéance ${libelleObligation} est prévue le ${date}. Consultez votre espace pour vérifier les informations et les démarches nécessaires.`,
+    title: "Échéance fiscale à venir",
+    message: `Votre échéance ${labelObligation} est prévue le ${date}. Consultez votre espace pour vérifier les informations et les démarches nécessaires.`,
   };
 }
 
-function analyserListeJours(
-  valeur: string | undefined,
-  defaut: number[],
+function parseDayList(
+  value: string | undefined,
+  defaultValue: number[],
 ): number[] {
-  if (!valeur) return defaut;
-  const jours = valeur
+  if (!value) return defaultValue;
+  const days = value
     .split(",")
-    .map((entree) => Number(entree.trim()))
+    .map((entry) => Number(entry.trim()))
     .filter(
-      (nombre) => Number.isInteger(nombre) && nombre >= 0 && nombre <= 365,
+      (count) => Number.isInteger(count) && count >= 0 && count <= 365,
     );
-  return jours.length > 0 ? [...new Set(jours)] : defaut;
+  return days.length > 0 ? [...new Set(days)] : defaultValue;
 }
 
 export interface ReminderRunSummary {
-  obligationsExaminees: number;
-  notificationsCreees: number;
-  courrielsEnvoyes: number;
-  courrielsEchoues: number;
-  dejaExistantes: number;
-  sansCompteUtilisateur: number;
+  examinedObligations: number;
+  createdNotifications: number;
+  sentEmails: number;
+  failedEmails: number;
+  alreadyExisting: number;
+  withoutUserAccount: number;
 }
 
 @Injectable()
 export class DeadlineReminderService {
-  private readonly journal = new Logger(DeadlineReminderService.name);
-  readonly politique: ReminderPolicy;
+  private readonly activityLog = new Logger(DeadlineReminderService.name);
+  readonly policy: ReminderPolicy;
 
   constructor(
     @InjectRepository(ObligationEntity)
     private readonly obligations: Repository<ObligationEntity>,
     @InjectRepository(NotificationEntity)
     private readonly notifications: Repository<NotificationEntity>,
-    @Inject(MAIL_SERVICE) private readonly courriel: MailSender,
+    @Inject(MAIL_SERVICE) private readonly email: MailSender,
     configuration: ConfigService,
   ) {
-    this.politique = {
-      joursAvant: analyserListeJours(
+    this.policy = {
+      daysBefore: parseDayList(
         configuration.get<string>("RAPPELS_JOURS_AVANT"),
         [7, 3, 1, 0],
       ),
-      joursRetard: analyserListeJours(
+      daysOverdue: parseDayList(
         configuration.get<string>("RAPPELS_JOURS_RETARD"),
         [1, 3, 7],
       ),
-      fuseauHoraire: configuration.get<string>(
+      timeZone: configuration.get<string>(
         "FUSEAU_HORAIRE",
         DEFAULT_TIMEZONE,
       ),
-      tentativesCourrielMax: Math.max(
+      maxEmailAttempts: Math.max(
         1,
         Number(
           configuration.get<string>("RAPPELS_TENTATIVES_COURRIEL_MAX", "3"),
@@ -180,142 +180,142 @@ export class DeadlineReminderService {
   }
 
   /**
-   * Évalue les obligations et crée les rappels du jour. Idempotent :
-   * la clé unique utilisateur+obligation+type empêche tout doublon, même en
-   * cas de double exécution ou de deux instances concurrentes (l'insertion
-   * concurrente perdante est ignorée, code PostgreSQL 23505).
-   * `maintenant` est injectable pour tester les dates sans attendre le calendrier.
+   * Evaluates obligations and creates today's reminders. Idempotent:
+   * the unique user+obligation+type key prevents any duplicate, even on
+   * double execution or two concurrent instances (the losing concurrent
+   * insert is ignored, PostgreSQL code 23505).
+   * `now` is injectable to test dates without waiting for the calendar.
    */
-  async traiter(maintenant: Date = new Date()): Promise<ReminderRunSummary> {
-    const bilan: ReminderRunSummary = {
-      obligationsExaminees: 0,
-      notificationsCreees: 0,
-      courrielsEnvoyes: 0,
-      courrielsEchoues: 0,
-      dejaExistantes: 0,
-      sansCompteUtilisateur: 0,
+  async processReminders(now: Date = new Date()): Promise<ReminderRunSummary> {
+    const summary: ReminderRunSummary = {
+      examinedObligations: 0,
+      createdNotifications: 0,
+      sentEmails: 0,
+      failedEmails: 0,
+      alreadyExisting: 0,
+      withoutUserAccount: 0,
     };
     const obligations = await this.obligations.find({
-      where: { statut: In(REMINDER_ELIGIBLE_STATUSES) },
-      relations: { contribuable: { utilisateur: true }, typeImpot: true },
-      take: 500, // lot borné ; les exécutions suivantes traitent la suite
+      where: { status: In(REMINDER_ELIGIBLE_STATUSES) },
+      relations: { taxpayer: { user: true }, taxType: true },
+      take: 500, // bounded batch; later runs process the rest
     });
-    bilan.obligationsExaminees = obligations.length;
+    summary.examinedObligations = obligations.length;
 
     for (const obligation of obligations) {
-      const utilisateur = obligation.contribuable?.utilisateur;
-      if (!utilisateur) {
-        bilan.sansCompteUtilisateur += 1;
+      const user = obligation.taxpayer?.user;
+      if (!user) {
+        summary.withoutUserAccount += 1;
         continue;
       }
-      const jours = daysUntilDeadline(
-        obligation.echeance,
-        maintenant,
-        this.politique.fuseauHoraire,
+      const days = daysUntilDeadline(
+        obligation.dueDate,
+        now,
+        this.policy.timeZone,
       );
-      const typeRappel = determineReminderType(jours, this.politique);
-      if (!typeRappel) continue;
+      const reminderType = determineReminderType(days, this.policy);
+      if (!reminderType) continue;
 
-      const cleIdempotence = `${utilisateur.id}:${obligation.id}:${typeRappel}`;
-      const existante = await this.notifications.findOne({
-        where: { cleIdempotence },
+      const idempotencyKey = `${user.id}:${obligation.id}:${reminderType}`;
+      const existing = await this.notifications.findOne({
+        where: { idempotencyKey },
       });
-      if (existante) {
-        bilan.dejaExistantes += 1;
-        // Relance bornée d'un courriel déjà en échec, sans recréer l'in-app.
+      if (existing) {
+        summary.alreadyExisting += 1;
+        // Bounded retry of an e-mail already failed, without recreating the in-app one.
         if (
-          existante.statutCourriel === NotificationEmailStatus.ECHEC &&
-          existante.tentativesCourriel < this.politique.tentativesCourrielMax
+          existing.emailStatus === NotificationEmailStatus.FAILED &&
+          existing.emailAttempts < this.policy.maxEmailAttempts
         ) {
-          await this.tenterCourriel(existante, obligation, bilan);
+          await this.trySendEmail(existing, obligation, summary);
         }
         continue;
       }
 
-      const libelle = `${obligation.typeImpot?.nom ?? "Obligation"} · ${obligation.periode} (${obligation.referenceFiscale})`;
-      const contenu = reminderContent(typeRappel, libelle, obligation.echeance);
+      const label = `${obligation.taxType?.name ?? "Obligation"} · ${obligation.period} (${obligation.taxReference})`;
+      const content = reminderContent(reminderType, label, obligation.dueDate);
       const notification = this.notifications.create({
-        utilisateur,
+        user,
         obligation,
-        typeRappel,
-        titre: contenu.titre,
-        message: contenu.message,
-        lien: "/client/obligations",
-        lue: false,
-        cleIdempotence,
-        statutCourriel: NotificationEmailStatus.EN_ATTENTE,
-        tentativesCourriel: 0,
-        derniereErreurCourriel: null,
-        courrielEnvoyeLe: null,
+        reminderType,
+        title: content.title,
+        message: content.message,
+        link: "/client/obligations",
+        isRead: false,
+        idempotencyKey,
+        emailStatus: NotificationEmailStatus.PENDING,
+        emailAttempts: 0,
+        lastEmailError: null,
+        emailSentAt: null,
       });
       try {
         await this.notifications.save(notification);
-      } catch (erreur) {
-        // Course entre deux instances : la contrainte unique a déjà créé la ligne.
-        if ((erreur as { code?: string }).code === "23505") {
-          bilan.dejaExistantes += 1;
+      } catch (error) {
+        // Race between two instances: the unique constraint already created the row.
+        if ((error as { code?: string }).code === "23505") {
+          summary.alreadyExisting += 1;
           continue;
         }
-        throw erreur;
+        throw error;
       }
-      bilan.notificationsCreees += 1;
-      await this.tenterCourriel(notification, obligation, bilan);
+      summary.createdNotifications += 1;
+      await this.trySendEmail(notification, obligation, summary);
     }
 
-    this.journal.log(
-      `Rappels d'échéances : ${JSON.stringify({ ...bilan, fuseau: this.politique.fuseauHoraire })}`,
+    this.activityLog.log(
+      `Rappels d'échéances : ${JSON.stringify({ ...summary, fuseau: this.policy.timeZone })}`,
     );
-    return bilan;
+    return summary;
   }
 
-  /** Tentative d'envoi ; l'échec n'efface jamais la notification in-app. */
-  private async tenterCourriel(
+  /** Send attempt; a failure never erases the in-app notification. */
+  private async trySendEmail(
     notification: NotificationEntity,
     obligation: ObligationEntity,
-    bilan: ReminderRunSummary,
+    summary: ReminderRunSummary,
   ): Promise<void> {
-    const destinataire = obligation.contribuable?.courriel ?? "";
-    notification.tentativesCourriel += 1;
-    if (!isValidEmail(destinataire)) {
-      notification.statutCourriel = NotificationEmailStatus.ECHEC;
-      notification.derniereErreurCourriel =
+    const recipient = obligation.taxpayer?.email ?? "";
+    notification.emailAttempts += 1;
+    if (!isValidEmail(recipient)) {
+      notification.emailStatus = NotificationEmailStatus.FAILED;
+      notification.lastEmailError =
         "Adresse e-mail absente ou invalide.";
-      bilan.courrielsEchoues += 1;
+      summary.failedEmails += 1;
       await this.notifications.save(notification);
       return;
     }
     try {
       const base = process.env.APP_URL ?? "http://localhost:5173";
-      await this.courriel.envoyer({
-        destinataire,
-        nomDestinataire:
-          obligation.contribuable?.raisonSociale ??
-          obligation.contribuable?.nom,
-        sujet: notification.titre,
-        texte: `${notification.message}\n\nConsulter mon espace : ${base}/client/obligations`,
+      await this.email.send({
+        recipient,
+        recipientName:
+          obligation.taxpayer?.legalName ??
+          obligation.taxpayer?.lastName,
+        subject: notification.title,
+        text: `${notification.message}\n\nConsulter mon espace : ${base}/client/obligations`,
         html: buildEmailHtml({
-          nomDestinataire:
-            obligation.contribuable?.raisonSociale ??
-            obligation.contribuable?.nom,
-          titre: notification.titre,
+          recipientName:
+            obligation.taxpayer?.legalName ??
+            obligation.taxpayer?.lastName,
+          title: notification.title,
           message: notification.message,
-          lienApplication: `${base}/client/obligations`,
+          appLink: `${base}/client/obligations`,
         }),
       });
-      notification.statutCourriel = NotificationEmailStatus.ENVOYE;
-      notification.courrielEnvoyeLe = new Date();
-      notification.derniereErreurCourriel = null;
-      bilan.courrielsEnvoyes += 1;
-    } catch (erreur) {
-      notification.statutCourriel = NotificationEmailStatus.ECHEC;
-      // Message technique court uniquement : aucun secret, aucune adresse complète journalisée.
-      notification.derniereErreurCourriel =
-        erreur instanceof Error
-          ? erreur.message.slice(0, 300)
+      notification.emailStatus = NotificationEmailStatus.SENT;
+      notification.emailSentAt = new Date();
+      notification.lastEmailError = null;
+      summary.sentEmails += 1;
+    } catch (error) {
+      notification.emailStatus = NotificationEmailStatus.FAILED;
+      // Short technical message only: no secret, no full address logged.
+      notification.lastEmailError =
+        error instanceof Error
+          ? error.message.slice(0, 300)
           : "Échec d'envoi du courriel.";
-      bilan.courrielsEchoues += 1;
-      this.journal.warn(
-        `Courriel de rappel en échec (obligation=${obligation.id}, notification=${notification.id}, tentative=${notification.tentativesCourriel})`,
+      summary.failedEmails += 1;
+      this.activityLog.warn(
+        `Courriel de rappel en échec (obligation=${obligation.id}, notification=${notification.id}, tentative=${notification.emailAttempts})`,
       );
     }
     await this.notifications.save(notification);

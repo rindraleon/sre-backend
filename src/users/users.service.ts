@@ -15,107 +15,107 @@ import { AuthenticatedUser } from "../common/interfaces/authenticated-user.inter
 export class UsersService {
   constructor(
     @InjectRepository(UserEntity)
-    private readonly utilisateurs: Repository<UserEntity>,
-    private readonly sourceDeDonnees: DataSource,
+    private readonly users: Repository<UserEntity>,
+    private readonly dataSource: DataSource,
   ) {}
 
-  async lister(recherche = "", page = 1, parPage = 25) {
-    const numeroPage = Math.max(1, Math.floor(page) || 1);
-    const taillePage = Math.min(100, Math.max(1, Math.floor(parPage) || 25));
-    const requete = this.utilisateurs
-      .createQueryBuilder("utilisateur")
-      .leftJoinAndSelect("utilisateur.contribuable", "contribuable")
+  async list(search = "", page = 1, perPage = 25) {
+    const pageNumber = Math.max(1, Math.floor(page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Math.floor(perPage) || 25));
+    const request = this.users
+      .createQueryBuilder("user")
+      .leftJoinAndSelect("user.taxpayer", "taxpayer")
       .where(
-        "(utilisateur.role = :roleAdmin OR contribuable.region = :region)",
+        "(user.role = :roleAdmin OR taxpayer.region = :region)",
         { roleAdmin: AccountRole.ADMIN, region: SRE_REGION },
       )
-      .orderBy("utilisateur.creeLe", "DESC");
-    const terme = recherche.trim();
-    if (terme) {
-      requete.andWhere(
-        "(utilisateur.nom ILIKE :terme OR utilisateur.courriel ILIKE :terme OR contribuable.nif ILIKE :terme)",
-        { terme: `%${terme}%` },
+      .orderBy("user.createdAt", "DESC");
+    const term = search.trim();
+    if (term) {
+      request.andWhere(
+        "(user.name ILIKE :term OR user.email ILIKE :term OR taxpayer.nif ILIKE :term)",
+        { term: `%${term}%` },
       );
     }
-    const [lignes, total] = await requete
-      .skip((numeroPage - 1) * taillePage)
-      .take(taillePage)
+    const [rows, total] = await request
+      .skip((pageNumber - 1) * pageSize)
+      .take(pageSize)
       .getManyAndCount();
     return {
-      donnees: lignes.map((utilisateur) => this.vuePublique(utilisateur)),
+      donnees: rows.map((user) => this.toPublicView(user)),
       total,
-      page: numeroPage,
-      parPage: taillePage,
+      page: pageNumber,
+      parPage: pageSize,
     };
   }
 
-  async modifierStatut(
+  async updateStatus(
     id: string,
-    statut: AccountStatus,
-    acteur: AuthenticatedUser,
+    status: AccountStatus,
+    actor: AuthenticatedUser,
   ) {
-    return this.sourceDeDonnees.transaction(async (gestionnaire) => {
-      // Un verrou commun sérialise les désactivations pour protéger le dernier administrateur actif.
-      await gestionnaire.query(
+    return this.dataSource.transaction(async (manager) => {
+      // A shared lock serializes deactivations to protect the last active administrator.
+      await manager.query(
         "SELECT pg_advisory_xact_lock($1)",
         [2026101202],
       );
-      const depotUtilisateurs = gestionnaire.getRepository(UserEntity);
-      const utilisateur = await depotUtilisateurs.findOne({
+      const usersRepository = manager.getRepository(UserEntity);
+      const user = await usersRepository.findOne({
         where: { id },
-        relations: { contribuable: true },
+        relations: { taxpayer: true },
       });
       if (
-        !utilisateur ||
-        (utilisateur.role !== AccountRole.ADMIN &&
-          utilisateur.contribuable?.region !== SRE_REGION)
+        !user ||
+        (user.role !== AccountRole.ADMIN &&
+          user.taxpayer?.region !== SRE_REGION)
       ) {
         throw new NotFoundException(
           "Utilisateur introuvable dans le périmètre du service.",
         );
       }
-      if (acteur.id === id && statut !== AccountStatus.ACTIF) {
+      if (actor.id === id && status !== AccountStatus.ACTIVE) {
         throw new BadRequestException(
           "Vous ne pouvez pas suspendre votre propre compte.",
         );
       }
       if (
-        utilisateur.role === AccountRole.ADMIN &&
-        utilisateur.statut === AccountStatus.ACTIF &&
-        statut !== AccountStatus.ACTIF
+        user.role === AccountRole.ADMIN &&
+        user.status === AccountStatus.ACTIVE &&
+        status !== AccountStatus.ACTIVE
       ) {
-        const nombreAdministrateursActifs = await depotUtilisateurs.count({
-          where: { role: AccountRole.ADMIN, statut: AccountStatus.ACTIF },
+        const activeAdministratorsCount = await usersRepository.count({
+          where: { role: AccountRole.ADMIN, status: AccountStatus.ACTIVE },
         });
-        if (nombreAdministrateursActifs <= 1) {
+        if (activeAdministratorsCount <= 1) {
           throw new ConflictException(
             "Le dernier compte administrateur actif ne peut pas être désactivé.",
           );
         }
       }
-      utilisateur.statut = statut;
-      return this.vuePublique(await depotUtilisateurs.save(utilisateur));
+      user.status = status;
+      return this.toPublicView(await usersRepository.save(user));
     });
   }
 
-  private vuePublique(utilisateur: UserEntity) {
+  private toPublicView(user: UserEntity) {
     return {
-      id: utilisateur.id,
-      nom: utilisateur.nom,
-      courriel: utilisateur.courriel,
-      role: utilisateur.role,
-      statut: utilisateur.statut,
-      changementMotDePasseRequis: utilisateur.changementMotDePasseRequis,
-      creeLe: utilisateur.creeLe,
-      derniereConnexion: utilisateur.derniereConnexion,
-      contribuableId: utilisateur.contribuable?.id,
-      contribuable: utilisateur.contribuable
+      id: user.id,
+      nom: user.name,
+      courriel: user.email,
+      role: user.role,
+      statut: user.status,
+      changementMotDePasseRequis: user.mustChangePassword,
+      creeLe: user.createdAt,
+      derniereConnexion: user.lastLoginAt,
+      contribuableId: user.taxpayer?.id,
+      contribuable: user.taxpayer
         ? {
-            type: utilisateur.contribuable.type,
-            nom: utilisateur.contribuable.nom,
-            prenom: utilisateur.contribuable.prenom,
-            raisonSociale: utilisateur.contribuable.raisonSociale,
-            nif: utilisateur.contribuable.nif,
+            type: user.taxpayer.type,
+            nom: user.taxpayer.lastName,
+            prenom: user.taxpayer.firstName,
+            raisonSociale: user.taxpayer.legalName,
+            nif: user.taxpayer.nif,
           }
         : undefined,
     };

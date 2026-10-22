@@ -7,19 +7,19 @@ import {
 } from "typeorm";
 
 /**
- * Journal d'activité (audit) : une ligne par action métier réalisée par un
- * compte authentifié. Alimenté par l'intercepteur global `JournalActiviteInterceptor`,
- * jamais par les contrôleurs — l'audit ne doit pas pouvoir être oublié.
+ * Activity log (audit): one row per business action performed by an
+ * authenticated account. Fed by the global `ActivityLogInterceptor`,
+ * never by controllers — auditing must not be forgettable.
  */
 @Entity({ name: "journaux_activite" })
-@Index("idx_journaux_activite_cree_le", ["creeLe"])
+@Index("idx_journaux_activite_cree_le", ["createdAt"])
 export class ActivityLogEntity {
   @PrimaryGeneratedColumn("uuid")
   id!: string;
 
-  /** Identifiant du compte à l'origine de l'action (sans jointure forte). */
+  /** Identifier of the account behind the action (no strong join). */
   @Column({ name: "acteur_id", type: "uuid", nullable: true })
-  acteurId!: string | null;
+  actorId!: string | null;
 
   @Column({
     name: "acteur_nom",
@@ -27,28 +27,32 @@ export class ActivityLogEntity {
     length: 160,
     default: "Système",
   })
-  acteurNom!: string;
+  actorName!: string;
 
-  /** ADMIN, CLIENT ou SYSTEME (valeurs hors enum de comptes possibles). */
+  /** ADMIN, CLIENT or SYSTEME (values outside the account enum are possible). */
   @Column({ type: "varchar", length: 16, default: "SYSTEME" })
   role!: string;
 
   @Column({ type: "varchar", length: 80 })
   action!: string;
 
-  @Column({ type: "varchar", length: 80 })
-  ressource!: string;
+  @Column({
+      name: "ressource",
+    type: "varchar", length: 80 })
+  resource!: string;
 
   @Column({ name: "reference_ressource", type: "varchar", length: 120, nullable: true })
-  referenceRessource!: string | null;
+  resourceReference!: string | null;
 
-  @Column({ type: "varchar", length: 16 })
-  resultat!: "SUCCES" | "ECHEC";
+  @Column({
+      name: "resultat",
+    type: "varchar", length: 16 })
+  result!: "SUCCES" | "ECHEC";
 
-  /** Méthode HTTP + chemin traité, message d'erreur en cas d'échec. */
+  /** HTTP method + processed path, error message on failure. */
   @Column({ type: "text", nullable: true })
   details!: string | null;
 
   @CreateDateColumn({ name: "cree_le", type: "timestamptz" })
-  creeLe!: Date;
+  createdAt!: Date;
 }

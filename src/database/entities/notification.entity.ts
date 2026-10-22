@@ -10,86 +10,92 @@ import {
 import { ObligationEntity } from "./obligation.entity";
 import { UserEntity } from "./user.entity";
 
-/** État d'envoi du courriel associé à une notification (indépendant de l'in-app). */
+/** Delivery status of the e-mail attached to a notification (independent from in-app). */
 export enum NotificationEmailStatus {
-  /** Aucun transport e-mail configuré : rien n'a été tenté, rien n'est annoncé. */
+  /** No e-mail transport configured: nothing was attempted, nothing is announced. */
   NON_CONFIGURE = "NON_CONFIGURE",
-  EN_ATTENTE = "EN_ATTENTE",
-  ENVOYE = "ENVOYE",
-  /** Confirmée par le fournisseur de messagerie — jamais posée sans preuve. */
-  DELIVRE = "DELIVRE",
-  ECHEC = "ECHEC",
+  PENDING = "EN_ATTENTE",
+  SENT = "ENVOYE",
+  /** Confirmed by the mail provider — never set without proof. */
+  DELIVERED = "DELIVRE",
+  FAILED = "ECHEC",
 }
 
 /**
- * Notification persistée (centre de notifications in-app).
- * `cleIdempotence` unique = utilisateur + obligation + type de rappel :
- * le job de rappels peut être relancé (ou exécuté en double instance) sans
- * jamais créer deux notifications du même type pour la même obligation.
+ * Persisted notification (in-app notification center).
+ * Unique `idempotencyKey` = user + obligation + reminder type:
+ * the reminder job can be re-run (or run twice concurrently) without
+ * ever creating two notifications of the same type for the same obligation.
  */
 @Entity({ name: "notifications" })
-@Index("uq_notifications_cle_idempotence", ["cleIdempotence"], { unique: true })
-@Index("idx_notifications_utilisateur_lue", ["utilisateur", "lue"])
+@Index("uq_notifications_cle_idempotence", ["idempotencyKey"], { unique: true })
+@Index("idx_notifications_utilisateur_lue", ["user", "isRead"])
 export class NotificationEntity {
   @PrimaryGeneratedColumn("uuid")
   id!: string;
 
   @ManyToOne(() => UserEntity, { nullable: false, onDelete: "CASCADE" })
   @JoinColumn({ name: "utilisateur_id" })
-  utilisateur!: UserEntity;
+  user!: UserEntity;
 
   @ManyToOne(() => ObligationEntity, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "obligation_id" })
   obligation!: ObligationEntity | null;
 
-  /** Administrateur à l'origine d'une notification manuelle (traçabilité). */
+  /** Administrator behind a manual notification (traceability). */
   @ManyToOne(() => UserEntity, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "cree_par_id" })
-  creePar!: UserEntity | null;
+  createdBy!: UserEntity | null;
 
   /** Ex. AVANT_7, AVANT_3, AVANT_1, JOUR_J, RETARD_1, RETARD_3, RETARD_7. */
   @Column({ name: "type_rappel", type: "varchar", length: 24 })
-  typeRappel!: string;
+  reminderType!: string;
 
-  @Column({ type: "varchar", length: 160 })
-  titre!: string;
+  @Column({
+      name: "titre",
+    type: "varchar", length: 160 })
+  title!: string;
 
   @Column({ type: "text" })
   message!: string;
 
-  @Column({ type: "varchar", length: 200, nullable: true })
-  lien!: string | null;
+  @Column({
+      name: "lien",
+    type: "varchar", length: 200, nullable: true })
+  link!: string | null;
 
-  @Column({ type: "boolean", default: false })
-  lue!: boolean;
+  @Column({
+      name: "lue",
+    type: "boolean", default: false })
+  isRead!: boolean;
 
   @Column({ name: "cle_idempotence", type: "varchar", length: 200 })
-  cleIdempotence!: string;
+  idempotencyKey!: string;
 
   @Column({
     name: "statut_courriel",
     type: "enum",
     enum: NotificationEmailStatus,
     enumName: "statut_courriel_notification_enum",
-    default: NotificationEmailStatus.EN_ATTENTE,
+    default: NotificationEmailStatus.PENDING,
   })
-  statutCourriel!: NotificationEmailStatus;
+  emailStatus!: NotificationEmailStatus;
 
   @Column({ name: "tentatives_courriel", type: "int", default: 0 })
-  tentativesCourriel!: number;
+  emailAttempts!: number;
 
-  /** Raison technique courte, sans secret ni donnée personnelle. */
+  /** Short technical reason, with no secret or personal data. */
   @Column({
     name: "derniere_erreur_courriel",
     type: "varchar",
     length: 300,
     nullable: true,
   })
-  derniereErreurCourriel!: string | null;
+  lastEmailError!: string | null;
 
   @Column({ name: "courriel_envoye_le", type: "timestamptz", nullable: true })
-  courrielEnvoyeLe!: Date | null;
+  emailSentAt!: Date | null;
 
   @CreateDateColumn({ name: "cree_le", type: "timestamptz" })
-  creeLe!: Date;
+  createdAt!: Date;
 }

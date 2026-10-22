@@ -21,10 +21,10 @@ export class LoginDto {
   motDePasse!: string;
 
   /**
-   * @deprecated Conservé pour la compatibilité des clients existants, mais
-   * ignoré : l'authentification est fondée sur l'adresse e-mail et le mot de
-   * passe uniquement. Le numéro STAT ne sert que de mot de passe provisoire
-   * lors de la première connexion (saisi dans `motDePasse`).
+   * @deprecated Kept for compatibility with existing clients, but
+   * ignored: authentication is based on the e-mail address and the
+   * password only. The STAT number only serves as a provisional password
+   * at first sign-in (entered in `motDePasse`).
    */
   @ApiPropertyOptional({
     deprecated: true,

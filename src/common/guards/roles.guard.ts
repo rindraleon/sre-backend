@@ -5,18 +5,18 @@ import { AuthenticatedUser } from "../interfaces/authenticated-user.interface";
 
 @Injectable()
 export class RolesGuard implements CanActivate {
-  constructor(private readonly reflecteur: Reflector) {}
+  constructor(private readonly reflector: Reflector) {}
 
-  canActivate(contexte: ExecutionContext): boolean {
-    const roles = this.reflecteur.getAllAndOverride<string[]>(ROLES_KEY, [
-      contexte.getHandler(),
-      contexte.getClass(),
+  canActivate(context: ExecutionContext): boolean {
+    const roles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
     ]);
     if (!roles || roles.length === 0) return true;
 
-    const requete = contexte
+    const request = context
       .switchToHttp()
       .getRequest<{ user?: AuthenticatedUser }>();
-    return Boolean(requete.user && roles.includes(requete.user.role));
+    return Boolean(request.user && roles.includes(request.user.role));
   }
 }

@@ -17,40 +17,45 @@ import { PaymentEventEntity } from "./payment-event.entity";
 import { UserEntity } from "./user.entity";
 
 @Entity({ name: "paiements" })
-@Index("uq_paiements_reference_interne", ["referenceInterne"], { unique: true })
-@Index("idx_paiements_contribuable_soumis", ["contribuable", "soumisLe"])
-@Index("idx_paiements_statut", ["statut"])
+@Index("uq_paiements_reference_interne", ["internalReference"], { unique: true })
+@Index("idx_paiements_contribuable_soumis", ["taxpayer", "submittedAt"])
+@Index("idx_paiements_statut", ["status"])
 export class PaymentEntity {
   @PrimaryGeneratedColumn("uuid")
   id!: string;
 
   @Column({ name: "reference_interne", type: "varchar", length: 48 })
-  referenceInterne!: string;
+  internalReference!: string;
 
   @ManyToOne(() => TaxpayerEntity, { nullable: false, onDelete: "CASCADE" })
   @JoinColumn({ name: "contribuable_id" })
-  contribuable!: TaxpayerEntity;
+  taxpayer!: TaxpayerEntity;
 
   @ManyToOne(() => ObligationEntity, { nullable: false, onDelete: "RESTRICT" })
   @JoinColumn({ name: "obligation_id" })
   obligation!: ObligationEntity;
 
-  @Column({ type: "numeric", precision: 15, scale: 0 })
-  montant!: string;
+  @Column({
+      name: "montant",
+    type: "numeric", precision: 15, scale: 0 })
+  amount!: string;
 
-  @Column({ type: "char", length: 3, default: "MGA" })
-  devise!: "MGA";
+  @Column({
+      name: "devise",
+    type: "char", length: 3, default: "MGA" })
+  currency!: "MGA";
 
   @Column({ type: "enum", enum: PaymentMethod, enumName: "mode_paiement_enum" })
   mode!: PaymentMethod;
 
   @Column({
+      name: "operateur",
     type: "enum",
     enum: PaymentOperator,
     enumName: "operateur_paiement_enum",
     nullable: true,
   })
-  operateur!: PaymentOperator | null;
+  operator!: PaymentOperator | null;
 
   @Column({
     name: "telephone_utilise",
@@ -58,7 +63,7 @@ export class PaymentEntity {
     length: 40,
     nullable: true,
   })
-  telephoneUtilise!: string | null;
+  usedPhone!: string | null;
 
   @Column({
     name: "banque_ou_canal",
@@ -66,7 +71,7 @@ export class PaymentEntity {
     length: 140,
     nullable: true,
   })
-  banqueOuCanal!: string | null;
+  bankOrChannel!: string | null;
 
   @Column({
     name: "titulaire_payeur",
@@ -74,13 +79,13 @@ export class PaymentEntity {
     length: 180,
     nullable: true,
   })
-  titulairePayeur!: string | null;
+  payerName!: string | null;
 
   @Column({ name: "reference_transaction", type: "varchar", length: 128 })
-  referenceTransaction!: string;
+  transactionReference!: string;
 
   @Column({ name: "date_transaction", type: "date" })
-  dateTransaction!: string;
+  transactionDate!: string;
 
   @Column({
     name: "justificatif_nom",
@@ -88,35 +93,36 @@ export class PaymentEntity {
     length: 200,
     nullable: true,
   })
-  justificatifNom!: string | null;
+  supportingDocumentName!: string | null;
 
   @Column({
+      name: "statut",
     type: "enum",
     enum: PaymentStatus,
     enumName: "statut_paiement_enum",
-    default: PaymentStatus.EN_VERIFICATION,
+    default: PaymentStatus.UNDER_REVIEW,
   })
-  statut!: PaymentStatus;
+  status!: PaymentStatus;
 
   @Column({ name: "valide_le", type: "timestamptz", nullable: true })
-  valideLe!: Date | null;
+  validatedAt!: Date | null;
 
   @ManyToOne(() => UserEntity, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "valide_par_id" })
-  validePar!: UserEntity | null;
+  validatedBy!: UserEntity | null;
 
   @Column({ name: "motif_decision", type: "text", nullable: true })
-  motifDecision!: string | null;
+  decisionReason!: string | null;
 
-  @OneToMany(() => PaymentEventEntity, (evenement) => evenement.paiement)
-  historique!: PaymentEventEntity[];
+  @OneToMany(() => PaymentEventEntity, (event) => event.payment)
+  history!: PaymentEventEntity[];
 
-  @OneToMany(() => PaymentDocumentEntity, (document) => document.paiement)
+  @OneToMany(() => PaymentDocumentEntity, (document) => document.payment)
   documents!: PaymentDocumentEntity[];
 
   @CreateDateColumn({ name: "soumis_le", type: "timestamptz" })
-  soumisLe!: Date;
+  submittedAt!: Date;
 
   @UpdateDateColumn({ name: "modifie_le", type: "timestamptz" })
-  modifieLe!: Date;
+  updatedAt!: Date;
 }

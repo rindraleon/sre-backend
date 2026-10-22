@@ -42,7 +42,7 @@ export class CreateTaxTypeDto {
   })
   categorie!: string;
 
-  @IsIn(["TOUS", TaxpayerType.PARTICULIER, TaxpayerType.ENTREPRISE], {
+  @IsIn(["TOUS", TaxpayerType.INDIVIDUAL, TaxpayerType.BUSINESS], {
     message: "La valeur sélectionnée est invalide.",
   })
   contribuablesConcernes!: "TOUS" | TaxpayerType;

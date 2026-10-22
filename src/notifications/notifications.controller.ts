@@ -26,33 +26,33 @@ export class NotificationsController {
   @Get()
   @ApiOperation({ summary: "Lister les notifications du compte authentifié." })
   @ApiResponse({ status: 200, description: "Notifications filtrées par l'utilisateur du jeton." })
-  lister(@CurrentUser() utilisateur: AuthenticatedUser) {
-    return this.notifications.listerPourUtilisateur(utilisateur.id);
+  list(@CurrentUser() user: AuthenticatedUser) {
+    return this.notifications.listForUser(user.id);
   }
 
   @Get("non-lues")
   @ApiOperation({ summary: "Compter les notifications non lues du compte authentifié." })
   @ApiResponse({ status: 200, description: "Compteur du seul compte connecté." })
-  compterNonLues(@CurrentUser() utilisateur: AuthenticatedUser) {
-    return this.notifications.compterNonLues(utilisateur.id);
+  countUnread(@CurrentUser() user: AuthenticatedUser) {
+    return this.notifications.countUnread(user.id);
   }
 
-  // Déclarée avant `:id` pour ne pas être capturée comme un identifiant.
+  // Declared before `:id` so it is not captured as an identifier.
   @Patch("toutes-lues")
   @ApiOperation({ summary: "Marquer comme lues les notifications du compte authentifié." })
   @ApiResponse({ status: 200, description: "Notifications propres au compte mises à jour." })
-  marquerToutesLues(@CurrentUser() utilisateur: AuthenticatedUser) {
-    return this.notifications.marquerToutesLues(utilisateur.id);
+  markAllAsRead(@CurrentUser() user: AuthenticatedUser) {
+    return this.notifications.markAllAsRead(user.id);
   }
 
   @Patch(":id/lue")
   @ApiOperation({ summary: "Marquer comme lue une notification du compte authentifié." })
   @ApiResponse({ status: 200, description: "Notification marquée comme lue." })
   @ApiResponse({ status: 404, description: "Notification absente ou appartenant à un autre compte." })
-  marquerLue(
+  markAsRead(
     @Param("id", new ParseUUIDPipe()) id: string,
-    @CurrentUser() utilisateur: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.notifications.marquerLue(id, utilisateur.id);
+    return this.notifications.markAsRead(id, user.id);
   }
 }

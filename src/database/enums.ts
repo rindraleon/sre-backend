@@ -4,37 +4,37 @@ export enum AccountRole {
 }
 
 export enum AccountStatus {
-  ACTIF = "ACTIF",
-  EN_ATTENTE = "EN_ATTENTE",
-  INACTIF = "INACTIF",
-  SUSPENDU = "SUSPENDU",
+  ACTIVE = "ACTIF",
+  PENDING = "EN_ATTENTE",
+  INACTIVE = "INACTIF",
+  SUSPENDED = "SUSPENDU",
 }
 
 export enum TaxpayerType {
-  PARTICULIER = "PARTICULIER",
-  ENTREPRISE = "ENTREPRISE",
+  INDIVIDUAL = "PARTICULIER",
+  BUSINESS = "ENTREPRISE",
 }
 
 export enum ObligationStatus {
-  A_PAYER = "A_PAYER",
-  PAIEMENT_EN_COURS = "PAIEMENT_EN_COURS",
-  EN_VERIFICATION = "EN_VERIFICATION",
-  PAYE = "PAYE",
-  EN_RETARD = "EN_RETARD",
-  REJETE = "REJETE",
-  CORRECTION_DEMANDEE = "CORRECTION_DEMANDEE",
+  TO_PAY = "A_PAYER",
+  PAYMENT_IN_PROGRESS = "PAIEMENT_EN_COURS",
+  UNDER_REVIEW = "EN_VERIFICATION",
+  PAID = "PAYE",
+  OVERDUE = "EN_RETARD",
+  REJECTED = "REJETE",
+  CORRECTION_REQUESTED = "CORRECTION_DEMANDEE",
 }
 
 export enum PaymentStatus {
-  EN_VERIFICATION = "EN_VERIFICATION",
-  CONFIRME = "CONFIRME",
-  REJETE = "REJETE",
-  CORRECTION_DEMANDEE = "CORRECTION_DEMANDEE",
+  UNDER_REVIEW = "EN_VERIFICATION",
+  CONFIRMED = "CONFIRME",
+  REJECTED = "REJETE",
+  CORRECTION_REQUESTED = "CORRECTION_DEMANDEE",
 }
 
 export enum PaymentMethod {
   MOBILE_MONEY = "MOBILE_MONEY",
-  VIREMENT_BANCAIRE = "VIREMENT_BANCAIRE",
+  BANK_TRANSFER = "VIREMENT_BANCAIRE",
 }
 
 export enum PaymentOperator {
@@ -44,33 +44,33 @@ export enum PaymentOperator {
 }
 
 export enum PaymentDocumentType {
-  ACCUSE_DECLARATION = "ACCUSE_DECLARATION",
-  RECU_PAIEMENT = "RECU_PAIEMENT",
+  DECLARATION_ACKNOWLEDGMENT = "ACCUSE_DECLARATION",
+  PAYMENT_RECEIPT = "RECU_PAIEMENT",
 }
 
 export enum DocumentStatus {
-  VALIDE = "VALIDE",
-  ANNULE = "ANNULE",
+  VALID = "VALIDE",
+  CANCELLED = "ANNULE",
 }
 
 export enum TaxPeriodicity {
-  MENSUELLE = "MENSUELLE",
-  TRIMESTRIELLE = "TRIMESTRIELLE",
-  ANNUELLE = "ANNUELLE",
-  PONCTUELLE = "PONCTUELLE",
+  MONTHLY = "MENSUELLE",
+  QUARTERLY = "TRIMESTRIELLE",
+  YEARLY = "ANNUELLE",
+  ONE_OFF = "PONCTUELLE",
 }
 
-/** Type de jeton sécurisé à usage limité (empreinte SHA-256 stockée). */
+/** Secure single-purpose token type (SHA-256 fingerprint stored). */
 export enum ActivationTokenType {
-  /** Première connexion d'un compte créé par import (parcours d'activation). */
+  /** First sign-in of an account created by import (activation flow). */
   ACTIVATION = "ACTIVATION",
-  /** Réinitialisation sécurisée du mot de passe. */
-  REINITIALISATION = "REINITIALISATION",
+  /** Secure password reset. */
+  PASSWORD_RESET = "REINITIALISATION",
 }
 
-/** Statut d'envoi d'un courriel d'activation / première connexion. */
+/** Delivery status of an activation / first-sign-in e-mail. */
 export enum ActivationEmailStatus {
-  EN_ATTENTE = "EN_ATTENTE",
-  ENVOYEE = "ENVOYEE",
-  ECHEC = "ECHEC",
+  PENDING = "EN_ATTENTE",
+  SENT = "ENVOYEE",
+  FAILED = "ECHEC",
 }

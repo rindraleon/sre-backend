@@ -17,14 +17,18 @@ export class TaxTypeEntity {
   @Column({ type: "varchar", length: 32 })
   code!: string;
 
-  @Column({ type: "varchar", length: 160 })
-  nom!: string;
+  @Column({
+      name: "nom",
+    type: "varchar", length: 160 })
+  name!: string;
 
   @Column({ type: "text", default: "" })
   description!: string;
 
-  @Column({ type: "varchar", length: 100 })
-  categorie!: string;
+  @Column({
+      name: "categorie",
+    type: "varchar", length: 100 })
+  category!: string;
 
   @Column({
     name: "contribuables_concernes",
@@ -32,17 +36,18 @@ export class TaxTypeEntity {
     length: 20,
     default: "TOUS",
   })
-  contribuablesConcernes!: "TOUS" | TaxpayerType;
+  applicableTaxpayers!: "TOUS" | TaxpayerType;
 
   @Column({
+      name: "periodicite",
     type: "enum",
     enum: TaxPeriodicity,
     enumName: "periodicite_impot_enum",
   })
-  periodicite!: TaxPeriodicity;
+  periodicity!: TaxPeriodicity;
 
   @Column({ name: "regle_echeance", type: "varchar", length: 220, default: "" })
-  regleEcheance!: string;
+  dueDateRule!: string;
 
   @Column({
     name: "mode_montant",
@@ -50,7 +55,7 @@ export class TaxTypeEntity {
     length: 20,
     default: "MANUEL",
   })
-  modeMontant!: "FIXE" | "CALCULE" | "MANUEL";
+  amountMode!: "FIXE" | "CALCULE" | "MANUEL";
 
   @Column({
     name: "montant_reference",
@@ -59,21 +64,23 @@ export class TaxTypeEntity {
     scale: 0,
     nullable: true,
   })
-  montantReference!: string | null;
+  referenceAmount!: string | null;
 
   @Column({
     name: "champs_complementaires",
     type: "jsonb",
     default: () => "'[]'::jsonb",
   })
-  champsComplementaires!: string[];
+  additionalFields!: string[];
 
-  @Column({ type: "boolean", default: true })
-  actif!: boolean;
+  @Column({
+      name: "actif",
+    type: "boolean", default: true })
+  isActive!: boolean;
 
   @CreateDateColumn({ name: "cree_le", type: "timestamptz" })
-  creeLe!: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ name: "modifie_le", type: "timestamptz" })
-  modifieLe!: Date;
+  updatedAt!: Date;
 }

@@ -10,7 +10,7 @@ import { Throttle } from "@nestjs/throttler";
 import { PublicContactDto } from "./dto/public-contact.dto";
 import { PublicContactService } from "./public-contact.service";
 
-/** Formulaire public du landing : aucune authentification requise. */
+/** Public landing form: no authentication required. */
 @ApiTags("Contact public")
 @Controller("contact")
 export class PublicContactController {
@@ -28,7 +28,7 @@ export class PublicContactController {
   @ApiResponse({ status: 400, description: "Données de contact invalides." })
   @ApiResponse({ status: 429, description: "Trop de messages envoyés ; réessayez plus tard." })
   @ApiResponse({ status: 503, description: "Le service de courriel est indisponible." })
-  envoyer(@Body() donnees: PublicContactDto) {
-    return this.contact.envoyer(donnees);
+  send(@Body() data: PublicContactDto) {
+    return this.contact.send(data);
   }
 }

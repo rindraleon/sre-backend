@@ -26,65 +26,65 @@ export class DocumentsService {
     private readonly documents: Repository<PaymentDocumentEntity>,
   ) {}
 
-  async creerAccuse(gestionnaire: EntityManager, paiement: PaymentEntity) {
-    return this.creerDocument(
-      gestionnaire,
-      paiement,
-      PaymentDocumentType.ACCUSE_DECLARATION,
+  async createAcknowledgment(manager: EntityManager, payment: PaymentEntity) {
+    return this.createDocument(
+      manager,
+      payment,
+      PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT,
       null,
     );
   }
 
-  async creerRecuInterne(
-    gestionnaire: EntityManager,
-    paiement: PaymentEntity,
-    administrateur: UserEntity,
+  async createInternalReceipt(
+    manager: EntityManager,
+    payment: PaymentEntity,
+    administrator: UserEntity,
   ) {
-    return this.creerDocument(
-      gestionnaire,
-      paiement,
-      PaymentDocumentType.RECU_PAIEMENT,
-      administrateur,
+    return this.createDocument(
+      manager,
+      payment,
+      PaymentDocumentType.PAYMENT_RECEIPT,
+      administrator,
     );
   }
 
-  async listerMesDocuments(idContribuable: string) {
+  async listMyDocuments(taxpayerId: string) {
     const documents = await this.documents.find({
-      where: { contribuable: { id: idContribuable, region: SRE_REGION } },
+      where: { taxpayer: { id: taxpayerId, region: SRE_REGION } },
       relations: {
-        contribuable: true,
-        paiement: { obligation: { typeImpot: true } },
+        taxpayer: true,
+        payment: { obligation: { taxType: true } },
       },
-      order: { emisLe: "DESC" },
+      order: { issuedAt: "DESC" },
     });
-    return documents.map((document) => this.vueDocument(document));
+    return documents.map((document) => this.toDocumentView(document));
   }
 
-  async obtenirDocument(id: string, utilisateur: AuthenticatedUser) {
-    const document = await this.chargerDocument(id);
-    this.verifierAcces(document, utilisateur);
-    return this.vueDocument(document, true);
+  async getDocument(id: string, user: AuthenticatedUser) {
+    const document = await this.loadDocument(id);
+    this.checkAccess(document, user);
+    return this.toDocumentView(document, true);
   }
 
-  async obtenirPdf(
+  async getPdf(
     id: string,
-    utilisateur: AuthenticatedUser,
-  ): Promise<{ numero: string; contenu: Buffer }> {
-    const document = await this.chargerDocument(id);
-    this.verifierAcces(document, utilisateur);
+    user: AuthenticatedUser,
+  ): Promise<{ number: string; content: Buffer }> {
+    const document = await this.loadDocument(id);
+    this.checkAccess(document, user);
     return {
-      numero: document.numero,
-      contenu: await this.genererPdf(document),
+      number: document.number,
+      content: await this.generatePdf(document),
     };
   }
 
-  private async chargerDocument(id: string) {
+  private async loadDocument(id: string) {
     const document = await this.documents.findOne({
       where: { id },
       relations: {
-        paiement: { obligation: { typeImpot: true } },
-        contribuable: true,
-        emisPar: true,
+        payment: { obligation: { taxType: true } },
+        taxpayer: true,
+        issuedBy: true,
       },
     });
     if (!document)
@@ -92,180 +92,180 @@ export class DocumentsService {
     return document;
   }
 
-  private verifierAcces(
+  private checkAccess(
     document: PaymentDocumentEntity,
-    utilisateur: AuthenticatedUser,
+    user: AuthenticatedUser,
   ) {
     if (
-      document.statut !== DocumentStatus.VALIDE ||
-      document.contribuable.region !== SRE_REGION
+      document.status !== DocumentStatus.VALID ||
+      document.taxpayer.region !== SRE_REGION
     ) {
       throw new NotFoundException(
         "Ce document n'est pas disponible dans le périmètre du service.",
       );
     }
     if (
-      utilisateur.role !== AccountRole.ADMIN &&
-      document.contribuable.id !== utilisateur.contribuableId
+      user.role !== AccountRole.ADMIN &&
+      document.taxpayer.id !== user.taxpayerId
     ) {
       throw new ForbiddenException("Ce document ne vous appartient pas.");
     }
   }
 
-  private async creerDocument(
-    gestionnaire: EntityManager,
-    paiement: PaymentEntity,
+  private async createDocument(
+    manager: EntityManager,
+    payment: PaymentEntity,
     type: PaymentDocumentType,
-    administrateur: UserEntity | null,
+    administrator: UserEntity | null,
   ) {
-    const dateEmission = new Date();
-    const annee = dateEmission.getFullYear();
-    const suffixe = paiement.referenceInterne
+    const issueDate = new Date();
+    const year = issueDate.getFullYear();
+    const suffix = payment.internalReference
       .replace(/[^A-Z0-9]/gi, "")
       .slice(-12)
       .toUpperCase();
-    const prefixe =
-      type === PaymentDocumentType.ACCUSE_DECLARATION ? "ACC" : "REC";
-    const numero = `SRE-${prefixe}-${annee}-${suffixe}`;
-    const emetteur = this.configuration.get<string>(
+    const prefix =
+      type === PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT ? "ACC" : "REC";
+    const number = `SRE-${prefix}-${year}-${suffix}`;
+    const issuer = this.configuration.get<string>(
       "DOCUMENT_ISSUER",
       "SRE · document interne",
     );
     const mention =
-      type === PaymentDocumentType.ACCUSE_DECLARATION
+      type === PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT
         ? "Accusé de réception de la déclaration. Ce document confirme uniquement la soumission des informations déclarées par l'usager. Il ne confirme pas la réception de fonds ni le règlement d'un impôt."
         : "Reçu interne SRE émis après une décision administrative de confirmation. Aucun prestataire bancaire ou mobile-money n'étant connecté, ce document ne constitue pas un reçu bancaire, une preuve de transfert ni une confirmation indépendante de réception de fonds.";
 
-    const instantane: Record<string, unknown> = {
+    const snapshot: Record<string, unknown> = {
       titre:
-        type === PaymentDocumentType.ACCUSE_DECLARATION
+        type === PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT
           ? "Accusé de réception de déclaration"
           : "Reçu interne SRE",
-      numero,
+      numero: number,
       type,
-      emisLe: dateEmission.toISOString(),
-      emetteur,
-      montant: paiement.montant,
-      devise: paiement.devise,
+      emisLe: issueDate.toISOString(),
+      emetteur: issuer,
+      montant: payment.amount,
+      devise: payment.currency,
       contribuable: {
         nom:
-          paiement.contribuable.raisonSociale ||
-          [paiement.contribuable.prenom, paiement.contribuable.nom]
+          payment.taxpayer.legalName ||
+          [payment.taxpayer.firstName, payment.taxpayer.lastName]
             .filter(Boolean)
             .join(" "),
-        nif: paiement.contribuable.nif,
-        courriel: paiement.contribuable.courriel,
+        nif: payment.taxpayer.nif,
+        courriel: payment.taxpayer.email,
       },
       obligation: {
-        referenceFiscale: paiement.obligation.referenceFiscale,
-        typeImpot: paiement.obligation.typeImpot?.nom ?? "Type d'impôt",
-        periode: paiement.obligation.periode,
+        referenceFiscale: payment.obligation.taxReference,
+        typeImpot: payment.obligation.taxType?.name ?? "Type d'impôt",
+        periode: payment.obligation.period,
       },
       paiement: {
-        referenceInterne: paiement.referenceInterne,
-        referenceTransactionDeclaree: paiement.referenceTransaction,
-        dateTransactionDeclaree: paiement.dateTransaction,
-        modeDeclare: paiement.mode,
-        statut: paiement.statut,
+        referenceInterne: payment.internalReference,
+        referenceTransactionDeclaree: payment.transactionReference,
+        dateTransactionDeclaree: payment.transactionDate,
+        modeDeclare: payment.mode,
+        statut: payment.status,
       },
       mention,
-      emettePar: administrateur?.nom ?? null,
+      emettePar: administrator?.name ?? null,
     };
 
-    const depot = gestionnaire.getRepository(PaymentDocumentEntity);
-    const document = depot.create({
-      numero,
+    const repository = manager.getRepository(PaymentDocumentEntity);
+    const document = repository.create({
+      number,
       type,
-      statut: DocumentStatus.VALIDE,
-      paiement,
-      contribuable: paiement.contribuable,
-      emisPar: administrateur,
-      montant: paiement.montant,
-      devise: paiement.devise,
-      emetteur,
+      status: DocumentStatus.VALID,
+      payment,
+      taxpayer: payment.taxpayer,
+      issuedBy: administrator,
+      amount: payment.amount,
+      currency: payment.currency,
+      issuer,
       mention,
-      instantane,
-      emisLe: dateEmission,
+      snapshot,
+      issuedAt: issueDate,
     });
-    return depot.save(document);
+    return repository.save(document);
   }
 
-  private vueDocument(document: PaymentDocumentEntity, detail = false) {
-    const instantane = document.instantane;
-    const obligation = (instantane.obligation ?? {}) as Record<string, unknown>;
-    const paiement = (instantane.paiement ?? {}) as Record<string, unknown>;
+  private toDocumentView(document: PaymentDocumentEntity, detail = false) {
+    const snapshot = document.snapshot;
+    const obligation = (snapshot.obligation ?? {}) as Record<string, unknown>;
+    const payment = (snapshot.paiement ?? {}) as Record<string, unknown>;
     return {
       id: document.id,
-      numero: document.numero,
+      numero: document.number,
       type: document.type,
-      statut: document.statut,
-      paiementId: document.paiement?.id,
-      referencePaiement: document.paiement?.referenceInterne,
-      contribuableId: document.contribuable?.id,
-      montant: Number(document.montant),
-      devise: document.devise,
-      emetteur: document.emetteur,
+      statut: document.status,
+      paiementId: document.payment?.id,
+      referencePaiement: document.payment?.internalReference,
+      contribuableId: document.taxpayer?.id,
+      montant: Number(document.amount),
+      devise: document.currency,
+      emetteur: document.issuer,
       mention: document.mention,
-      emisLe: document.emisLe,
+      emisLe: document.issuedAt,
       typeImpotNom: String(
         obligation.typeImpot ??
-          document.paiement?.obligation?.typeImpot?.nom ??
+          document.payment?.obligation?.taxType?.name ??
           "Type d'impôt",
       ),
       periode: String(
-        obligation.periode ?? document.paiement?.obligation?.periode ?? "—",
+        obligation.periode ?? document.payment?.obligation?.period ?? "—",
       ),
       referenceTransactionDeclaree: String(
-        paiement.referenceTransactionDeclaree ?? "—",
+        payment.referenceTransactionDeclaree ?? "—",
       ),
-      modeDeclare: String(paiement.modeDeclare ?? "—"),
+      modeDeclare: String(payment.modeDeclare ?? "—"),
       emisPar:
-        typeof instantane.emettePar === "string"
-          ? instantane.emettePar
+        typeof snapshot.emettePar === "string"
+          ? snapshot.emettePar
           : undefined,
       lienPdf: `/documents/${document.id}/pdf`,
-      ...(detail ? { instantane: document.instantane } : {}),
+      ...(detail ? { instantane: document.snapshot } : {}),
     };
   }
 
-  private async genererPdf(document: PaymentDocumentEntity): Promise<Buffer> {
-    const instantane = document.instantane;
-    const contribuable = (instantane.contribuable ?? {}) as Record<
+  private async generatePdf(document: PaymentDocumentEntity): Promise<Buffer> {
+    const snapshot = document.snapshot;
+    const taxpayer = (snapshot.contribuable ?? {}) as Record<
       string,
       unknown
     >;
-    const obligation = (instantane.obligation ?? {}) as Record<string, unknown>;
-    const paiement = (instantane.paiement ?? {}) as Record<string, unknown>;
-    const parties: Buffer[] = [];
+    const obligation = (snapshot.obligation ?? {}) as Record<string, unknown>;
+    const payment = (snapshot.paiement ?? {}) as Record<string, unknown>;
+    const parts: Buffer[] = [];
     return new Promise((resoudre, rejeter) => {
       const pdf = new PDFDocument({
         size: "A4",
         margin: 52,
-        info: { Title: document.numero, Author: document.emetteur },
+        info: { Title: document.number, Author: document.issuer },
       });
-      pdf.on("data", (partie: Buffer) => parties.push(partie));
-      pdf.on("end", () => resoudre(Buffer.concat(parties)));
+      pdf.on("data", (part: Buffer) => parts.push(part));
+      pdf.on("end", () => resoudre(Buffer.concat(parts)));
       pdf.on("error", rejeter);
 
       pdf
         .fillColor("#12243a")
         .font("Helvetica-Bold")
         .fontSize(10)
-        .text(document.emetteur.toUpperCase());
+        .text(document.issuer.toUpperCase());
       pdf.moveDown(2);
-      const titre =
-        document.type === PaymentDocumentType.ACCUSE_DECLARATION
+      const title =
+        document.type === PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT
           ? "ACCUSÉ DE RÉCEPTION DE DÉCLARATION"
           : "REÇU INTERNE SRE";
-      pdf.fontSize(19).text(titre, { align: "left" });
+      pdf.fontSize(19).text(title, { align: "left" });
       pdf.moveDown(0.5);
       pdf
         .fillColor("#52627a")
         .font("Helvetica")
         .fontSize(10)
-        .text(`Document n° ${document.numero}`);
+        .text(`Document n° ${document.number}`);
       pdf.text(
-        `Émis le ${new Date(document.emisLe).toLocaleString("fr-FR", { timeZone: "Indian/Antananarivo" })} (heure d'Antananarivo)`,
+        `Émis le ${new Date(document.issuedAt).toLocaleString("fr-FR", { timeZone: "Indian/Antananarivo" })} (heure d'Antananarivo)`,
       );
       pdf.moveDown(1.4);
       pdf.strokeColor("#d8e0e9").moveTo(52, pdf.y).lineTo(543, pdf.y).stroke();
@@ -280,9 +280,9 @@ export class DocumentsService {
       pdf
         .font("Helvetica")
         .fontSize(10)
-        .text(`Nom / raison sociale : ${String(contribuable.nom ?? "—")}`);
-      pdf.text(`NIF : ${String(contribuable.nif ?? "—")}`);
-      pdf.text(`Courriel : ${String(contribuable.courriel ?? "—")}`);
+        .text(`Nom / raison sociale : ${String(taxpayer.nom ?? "—")}`);
+      pdf.text(`NIF : ${String(taxpayer.nif ?? "—")}`);
+      pdf.text(`Courriel : ${String(taxpayer.courriel ?? "—")}`);
       pdf.moveDown(1);
 
       pdf.font("Helvetica-Bold").fontSize(12).text("Déclaration associée");
@@ -291,7 +291,7 @@ export class DocumentsService {
         .font("Helvetica")
         .fontSize(10)
         .text(
-          `Référence interne : ${document.paiement?.referenceInterne ?? "—"}`,
+          `Référence interne : ${document.payment?.internalReference ?? "—"}`,
         );
       pdf.text(
         `Impôt / période : ${String(obligation.typeImpot ?? "—")} · ${String(obligation.periode ?? "—")}`,
@@ -300,9 +300,9 @@ export class DocumentsService {
         `Référence d'obligation : ${String(obligation.referenceFiscale ?? "—")}`,
       );
       pdf.text(
-        `Référence de transaction déclarée : ${String(paiement.referenceTransactionDeclaree ?? "—")}`,
+        `Référence de transaction déclarée : ${String(payment.referenceTransactionDeclaree ?? "—")}`,
       );
-      pdf.text(`Mode déclaré : ${String(paiement.modeDeclare ?? "—")}`);
+      pdf.text(`Mode déclaré : ${String(payment.modeDeclare ?? "—")}`);
       pdf.moveDown(1.2);
 
       pdf
@@ -314,15 +314,15 @@ export class DocumentsService {
       pdf
         .fontSize(19)
         .text(
-          `${new Intl.NumberFormat("fr-FR").format(Number(document.montant))} ${document.devise}`,
+          `${new Intl.NumberFormat("fr-FR").format(Number(document.amount))} ${document.currency}`,
         );
       pdf.moveDown(1.1);
 
-      const alerte =
-        document.type === PaymentDocumentType.ACCUSE_DECLARATION
+      const alert =
+        document.type === PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT
           ? "ACCUSÉ DE SOUMISSION — PAS UNE PREUVE DE PAIEMENT"
           : "REÇU INTERNE DE DÉCISION — PAS UNE PREUVE BANCAIRE";
-      pdf.fillColor("#9a4d0b").font("Helvetica-Bold").fontSize(10).text(alerte);
+      pdf.fillColor("#9a4d0b").font("Helvetica-Bold").fontSize(10).text(alert);
       pdf.moveDown(0.4);
       pdf
         .fillColor("#334155")

@@ -23,7 +23,7 @@ export class PublicContactDto {
   @Length(10, 4000, { message: "Le message doit contenir entre 10 et 4 000 caractères." })
   message!: string;
 
-  /** Champ piège anti-robots : tout formulaire légitime le laisse vide. */
+  /** Anti-bot honeypot field: every legitimate form leaves it empty. */
   @ApiPropertyOptional({
     description: "Champ anti-robot masqué ; doit rester vide.",
     maxLength: 200,

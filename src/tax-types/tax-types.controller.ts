@@ -17,7 +17,7 @@ import { RolesGuard } from "../common/guards/roles.guard";
 import { CreateTaxTypeDto } from "./dto/create-tax-type.dto";
 import { TaxTypesService } from "./tax-types.service";
 
-class ActiviteTypeImpotDto {
+class TaxTypeActivityDto {
   @IsBoolean({ message: "Ce champ doit être un booléen." })
   actif!: boolean;
 }
@@ -27,21 +27,21 @@ class ActiviteTypeImpotDto {
 @Controller("types-impots")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class TaxTypesController {
-  constructor(private readonly typesImpots: TaxTypesService) {}
+  constructor(private readonly taxTypesService: TaxTypesService) {}
 
   @Get()
   @ApiOperation({ summary: "Lister les types d'impôts actifs accessibles aux comptes authentifiés." })
   @ApiResponse({ status: 200, description: "Types d'impôts actifs." })
-  listerActifs() {
-    return this.typesImpots.listerActifs();
+  listActive() {
+    return this.taxTypesService.listActive();
   }
 
   @Get("tous")
   @ApiOperation({ summary: "Lister tous les types d'impôts, y compris inactifs (administration)." })
   @ApiResponse({ status: 200, description: "Liste des types actifs et inactifs." })
   @Roles(AccountRole.ADMIN)
-  listerTous() {
-    return this.typesImpots.listerTous();
+  listAll() {
+    return this.taxTypesService.listAll();
   }
 
   @Post()
@@ -50,8 +50,8 @@ export class TaxTypesController {
   @ApiResponse({ status: 400, description: "Données de configuration invalides." })
   @ApiResponse({ status: 409, description: "Code de type d'impôt déjà utilisé." })
   @Roles(AccountRole.ADMIN)
-  creer(@Body() donnees: CreateTaxTypeDto) {
-    return this.typesImpots.creer(donnees);
+  create(@Body() data: CreateTaxTypeDto) {
+    return this.taxTypesService.create(data);
   }
 
   @Patch(":id")
@@ -61,11 +61,11 @@ export class TaxTypesController {
   @ApiResponse({ status: 404, description: "Type d'impôt introuvable." })
   @ApiResponse({ status: 409, description: "Code déjà attribué à un autre type." })
   @Roles(AccountRole.ADMIN)
-  modifier(
+  update(
     @Param("id", new ParseUUIDPipe()) id: string,
-    @Body() donnees: CreateTaxTypeDto,
+    @Body() data: CreateTaxTypeDto,
   ) {
-    return this.typesImpots.modifier(id, donnees);
+    return this.taxTypesService.update(id, data);
   }
 
   @Patch(":id/activite")
@@ -74,10 +74,10 @@ export class TaxTypesController {
   @ApiResponse({ status: 400, description: "Valeur de statut invalide." })
   @ApiResponse({ status: 404, description: "Type d'impôt introuvable." })
   @Roles(AccountRole.ADMIN)
-  definirActivite(
+  setActive(
     @Param("id", new ParseUUIDPipe()) id: string,
-    @Body() donnees: ActiviteTypeImpotDto,
+    @Body() data: TaxTypeActivityDto,
   ) {
-    return this.typesImpots.definirActivite(id, donnees.actif);
+    return this.taxTypesService.setActive(id, data.actif);
   }
 }

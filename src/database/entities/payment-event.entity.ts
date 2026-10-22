@@ -15,26 +15,29 @@ export class PaymentEventEntity {
   @PrimaryGeneratedColumn("uuid")
   id!: string;
 
-  @ManyToOne(() => PaymentEntity, (paiement) => paiement.historique, {
+  @ManyToOne(() => PaymentEntity, (payment) => payment.history, {
     nullable: false,
     onDelete: "CASCADE",
   })
   @JoinColumn({ name: "paiement_id" })
-  paiement!: PaymentEntity;
+  payment!: PaymentEntity;
 
   @Column({
+      name: "statut",
     type: "enum",
     enum: PaymentStatus,
     enumName: "statut_paiement_enum",
   })
-  statut!: PaymentStatus;
+  status!: PaymentStatus;
 
-  @Column({ type: "varchar", length: 180 })
-  libelle!: string;
+  @Column({
+      name: "libelle",
+    type: "varchar", length: 180 })
+  label!: string;
 
   @ManyToOne(() => UserEntity, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "acteur_id" })
-  acteur!: UserEntity | null;
+  actor!: UserEntity | null;
 
   @Column({
     name: "nom_acteur",
@@ -42,11 +45,13 @@ export class PaymentEventEntity {
     length: 160,
     default: "Système",
   })
-  nomActeur!: string;
+  actorName!: string;
 
-  @Column({ type: "text", nullable: true })
-  motif!: string | null;
+  @Column({
+      name: "motif",
+    type: "text", nullable: true })
+  reason!: string | null;
 
   @CreateDateColumn({ name: "cree_le", type: "timestamptz" })
-  creeLe!: Date;
+  createdAt!: Date;
 }

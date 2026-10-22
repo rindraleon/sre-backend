@@ -11,16 +11,20 @@ import { AccountRole, AccountStatus } from "../enums";
 import { TaxpayerEntity } from "./taxpayer.entity";
 
 @Entity({ name: "utilisateurs" })
-@Index("uq_utilisateurs_courriel", ["courriel"], { unique: true })
+@Index("uq_utilisateurs_courriel", ["email"], { unique: true })
 export class UserEntity {
   @PrimaryGeneratedColumn("uuid")
   id!: string;
 
-  @Column({ type: "varchar", length: 160 })
-  nom!: string;
+  @Column({
+      name: "nom",
+    type: "varchar", length: 160 })
+  name!: string;
 
-  @Column({ type: "varchar", length: 254 })
-  courriel!: string;
+  @Column({
+      name: "courriel",
+    type: "varchar", length: 254 })
+  email!: string;
 
   @Column({
     name: "mot_de_passe_hash",
@@ -28,7 +32,7 @@ export class UserEntity {
     length: 255,
     select: false,
   })
-  motDePasseHash!: string;
+  passwordHash!: string;
 
   @Column({
     type: "enum",
@@ -39,34 +43,35 @@ export class UserEntity {
   role!: AccountRole;
 
   @Column({
+      name: "statut",
     type: "enum",
     enum: AccountStatus,
     enumName: "statut_compte_enum",
-    default: AccountStatus.ACTIF,
+    default: AccountStatus.ACTIVE,
   })
-  statut!: AccountStatus;
+  status!: AccountStatus;
 
   @Column({
     name: "changement_mot_de_passe_requis",
     type: "boolean",
     default: false,
   })
-  changementMotDePasseRequis!: boolean;
+  mustChangePassword!: boolean;
 
   /**
-   * Profil complété / vérifié par l'utilisateur (configuration initiale).
-   * Tant que `changementMotDePasseRequis` ou `!profilComplete`, les routes
-   * métier restent bloquées côté serveur (parcours de configuration).
+   * Profile completed / verified by the user (initial setup).
+   * While `mustChangePassword` or `!isProfileComplete`, business routes
+   * stay blocked server-side (setup flow).
    */
   @Column({ name: "profil_complete", type: "boolean", default: true })
-  profilComplete!: boolean;
+  isProfileComplete!: boolean;
 
   @Column({ name: "derniere_connexion", type: "timestamptz", nullable: true })
-  derniereConnexion!: Date | null;
+  lastLoginAt!: Date | null;
 
-  /** Vérification de l'adresse e-mail par code à usage unique. */
+  /** E-mail address verification by single-use code. */
   @Column({ name: "courriel_verifie", type: "boolean", default: false })
-  courrielVerifie!: boolean;
+  isEmailVerified!: boolean;
 
   @Column({
     name: "verification_courriel_code_hash",
@@ -75,7 +80,7 @@ export class UserEntity {
     nullable: true,
     select: false,
   })
-  verificationCourrielCodeHash!: string | null;
+  emailVerificationCodeHash!: string | null;
 
   @Column({
     name: "verification_courriel_expire_le",
@@ -83,14 +88,14 @@ export class UserEntity {
     nullable: true,
     select: false,
   })
-  verificationCourrielExpireLe!: Date | null;
+  emailVerificationExpiresAt!: Date | null;
 
-  @OneToOne(() => TaxpayerEntity, (contribuable) => contribuable.utilisateur)
-  contribuable?: TaxpayerEntity;
+  @OneToOne(() => TaxpayerEntity, (taxpayer) => taxpayer.user)
+  taxpayer?: TaxpayerEntity;
 
   @CreateDateColumn({ name: "cree_le", type: "timestamptz" })
-  creeLe!: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ name: "modifie_le", type: "timestamptz" })
-  modifieLe!: Date;
+  updatedAt!: Date;
 }

@@ -22,64 +22,64 @@ export class ObligationsService {
     @InjectRepository(ObligationEntity)
     private readonly obligations: Repository<ObligationEntity>,
     @InjectRepository(TaxpayerEntity)
-    private readonly contribuables: Repository<TaxpayerEntity>,
+    private readonly taxpayers: Repository<TaxpayerEntity>,
     @InjectRepository(TaxTypeEntity)
-    private readonly typesImpots: Repository<TaxTypeEntity>,
+    private readonly taxTypes: Repository<TaxTypeEntity>,
   ) {}
 
-  async listerPourClient(idContribuable: string) {
-    const lignes = await this.obligations.find({
-      where: { contribuable: { id: idContribuable, region: SRE_REGION } },
-      relations: { contribuable: true, typeImpot: true },
-      order: { echeance: "ASC", creeLe: "DESC" },
+  async listForClient(taxpayerId: string) {
+    const rows = await this.obligations.find({
+      where: { taxpayer: { id: taxpayerId, region: SRE_REGION } },
+      relations: { taxpayer: true, taxType: true },
+      order: { dueDate: "ASC", createdAt: "DESC" },
     });
-    return lignes.map((obligation) => this.vueObligation(obligation));
+    return rows.map((obligation) => this.toObligationView(obligation));
   }
 
-  async listerPourAdministration() {
-    const lignes = await this.obligations.find({
-      where: { contribuable: { region: SRE_REGION } },
-      relations: { contribuable: true, typeImpot: true },
-      order: { creeLe: "DESC" },
+  async listForAdministration() {
+    const rows = await this.obligations.find({
+      where: { taxpayer: { region: SRE_REGION } },
+      relations: { taxpayer: true, taxType: true },
+      order: { createdAt: "DESC" },
     });
-    return lignes.map((obligation) => this.vueObligation(obligation, true));
+    return rows.map((obligation) => this.toObligationView(obligation, true));
   }
 
-  async obtenirUne(id: string, utilisateur: AuthenticatedUser) {
+  async getOne(id: string, user: AuthenticatedUser) {
     const obligation = await this.obligations.findOne({
-      where: { id, contribuable: { region: SRE_REGION } },
-      relations: { contribuable: true, typeImpot: true },
+      where: { id, taxpayer: { region: SRE_REGION } },
+      relations: { taxpayer: true, taxType: true },
     });
     if (!obligation) throw new NotFoundException("Obligation introuvable.");
     if (
-      utilisateur.role !== "ADMIN" &&
-      obligation.contribuable.id !== utilisateur.contribuableId
+      user.role !== "ADMIN" &&
+      obligation.taxpayer.id !== user.taxpayerId
     ) {
       throw new ForbiddenException("Cette obligation ne vous appartient pas.");
     }
-    return this.vueObligation(obligation, utilisateur.role === "ADMIN");
+    return this.toObligationView(obligation, user.role === "ADMIN");
   }
 
-  async creer(donnees: CreateObligationDto) {
-    const referenceFiscale =
-      donnees.referenceFiscale?.trim() ||
+  async create(data: CreateObligationDto) {
+    const taxReference =
+      data.referenceFiscale?.trim() ||
       `OBL-${new Date().getFullYear()}-${randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase()}`;
-    if (await this.obligations.exist({ where: { referenceFiscale } })) {
+    if (await this.obligations.exist({ where: { taxReference } })) {
       throw new ConflictException("Cette référence d'obligation existe déjà.");
     }
-    const [contribuable, typeImpot] = await Promise.all([
-      this.contribuables.findOneBy({
-        id: donnees.contribuableId,
+    const [taxpayer, taxType] = await Promise.all([
+      this.taxpayers.findOneBy({
+        id: data.contribuableId,
         region: SRE_REGION,
       }),
-      this.typesImpots.findOneBy({ id: donnees.typeImpotId, actif: true }),
+      this.taxTypes.findOneBy({ id: data.typeImpotId, isActive: true }),
     ]);
-    if (!contribuable) throw new NotFoundException("Contribuable introuvable.");
-    if (!typeImpot)
+    if (!taxpayer) throw new NotFoundException("Contribuable introuvable.");
+    if (!taxType)
       throw new NotFoundException("Type d'impôt actif introuvable.");
     if (
-      typeImpot.contribuablesConcernes !== "TOUS" &&
-      typeImpot.contribuablesConcernes !== contribuable.type
+      taxType.applicableTaxpayers !== "TOUS" &&
+      taxType.applicableTaxpayers !== taxpayer.type
     ) {
       throw new BadRequestException(
         "Ce type d'impôt n'est pas configuré pour le type de contribuable choisi.",
@@ -87,40 +87,40 @@ export class ObligationsService {
     }
 
     const obligation = this.obligations.create({
-      contribuable,
-      typeImpot,
-      referenceFiscale,
-      periode: donnees.periode.trim(),
-      montant: String(donnees.montant),
-      devise: "MGA",
-      echeance: donnees.echeance.slice(0, 10),
-      statut: ObligationStatus.A_PAYER,
+      taxpayer,
+      taxType,
+      taxReference,
+      period: data.periode.trim(),
+      amount: String(data.montant),
+      currency: "MGA",
+      dueDate: data.echeance.slice(0, 10),
+      status: ObligationStatus.TO_PAY,
     });
-    return this.vueObligation(await this.obligations.save(obligation), true);
+    return this.toObligationView(await this.obligations.save(obligation), true);
   }
 
-  private vueObligation(obligation: ObligationEntity, inclureProfil = false) {
+  private toObligationView(obligation: ObligationEntity, includeProfile = false) {
     return {
       id: obligation.id,
-      contribuableId: obligation.contribuable?.id,
-      typeImpotId: obligation.typeImpot?.id,
-      typeImpotNom: obligation.typeImpot?.nom,
-      referenceFiscale: obligation.referenceFiscale,
-      periode: obligation.periode,
-      montant: Number(obligation.montant),
-      devise: obligation.devise,
-      echeance: obligation.echeance,
-      statut: obligation.statut,
-      creeLe: obligation.creeLe,
-      ...(inclureProfil && obligation.contribuable
+      contribuableId: obligation.taxpayer?.id,
+      typeImpotId: obligation.taxType?.id,
+      typeImpotNom: obligation.taxType?.name,
+      referenceFiscale: obligation.taxReference,
+      periode: obligation.period,
+      montant: Number(obligation.amount),
+      devise: obligation.currency,
+      echeance: obligation.dueDate,
+      statut: obligation.status,
+      creeLe: obligation.createdAt,
+      ...(includeProfile && obligation.taxpayer
         ? {
             contribuable: {
-              id: obligation.contribuable.id,
-              nom: obligation.contribuable.nom,
-              prenom: obligation.contribuable.prenom,
-              raisonSociale: obligation.contribuable.raisonSociale,
-              nif: obligation.contribuable.nif,
-              courriel: obligation.contribuable.courriel,
+              id: obligation.taxpayer.id,
+              nom: obligation.taxpayer.lastName,
+              prenom: obligation.taxpayer.firstName,
+              raisonSociale: obligation.taxpayer.legalName,
+              nif: obligation.taxpayer.nif,
+              courriel: obligation.taxpayer.email,
             },
           }
         : {}),

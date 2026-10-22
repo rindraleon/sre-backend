@@ -1,12 +1,13 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
+import { toNotificationView } from "../common/views/entity-views";
 import { NotificationEntity } from "../database/entities/notification.entity";
 
 /**
- * Centre de notifications : chaque utilisateur ne voit et ne modifie que ses
- * propres notifications (filtrage systématique par `utilisateur_id`, côté
- * serveur — jamais par un identifiant fourni par le client).
+ * Notification center: each user only sees and modifies their
+ * own notifications (systematic filtering by `utilisateur_id`, server-side
+ * — never by an identifier provided by the client).
  */
 @Injectable()
 export class NotificationsService {
@@ -15,37 +16,40 @@ export class NotificationsService {
     private readonly notifications: Repository<NotificationEntity>,
   ) {}
 
-  listerPourUtilisateur(utilisateurId: string) {
-    return this.notifications.find({
-      where: { utilisateur: { id: utilisateurId } },
-      relations: { obligation: { typeImpot: true } },
-      order: { creeLe: "DESC" },
+  async listForUser(userId: string) {
+    const notifications = await this.notifications.find({
+      where: { user: { id: userId } },
+      relations: { obligation: { taxType: true } },
+      order: { createdAt: "DESC" },
       take: 100,
     });
-  }
-
-  async compterNonLues(utilisateurId: string): Promise<{ nonLues: number }> {
-    const nonLues = await this.notifications.count({
-      where: { utilisateur: { id: utilisateurId }, lue: false },
-    });
-    return { nonLues };
-  }
-
-  async marquerLue(id: string, utilisateurId: string) {
-    const notification = await this.notifications.findOne({
-      where: { id, utilisateur: { id: utilisateurId } },
-    });
-    // Même réponse pour « inexistante » et « à un autre utilisateur » : aucune fuite.
-    if (!notification) throw new NotFoundException("Notification introuvable.");
-    notification.lue = true;
-    return this.notifications.save(notification);
-  }
-
-  async marquerToutesLues(utilisateurId: string): Promise<{ nonLues: number }> {
-    await this.notifications.update(
-      { utilisateur: { id: utilisateurId }, lue: false },
-      { lue: true },
+    return notifications.map((notification) =>
+      toNotificationView(notification),
     );
-    return { nonLues: 0 };
+  }
+
+  async countUnread(userId: string): Promise<{ unreadCount: number }> {
+    const unreadCount = await this.notifications.count({
+      where: { user: { id: userId }, isRead: false },
+    });
+    return { unreadCount };
+  }
+
+  async markAsRead(id: string, userId: string) {
+    const notification = await this.notifications.findOne({
+      where: { id, user: { id: userId } },
+    });
+    // Same response for "not found" and "belongs to another user": no leakage.
+    if (!notification) throw new NotFoundException("Notification introuvable.");
+    notification.isRead = true;
+    return toNotificationView(await this.notifications.save(notification));
+  }
+
+  async markAllAsRead(userId: string): Promise<{ unreadCount: number }> {
+    await this.notifications.update(
+      { user: { id: userId }, isRead: false },
+      { isRead: true },
+    );
+    return { unreadCount: 0 };
   }
 }

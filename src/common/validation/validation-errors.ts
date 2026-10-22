@@ -2,34 +2,34 @@ import { BadRequestException } from "@nestjs/common";
 import type { ValidationError } from "class-validator";
 
 /**
- * Aplati les erreurs class-validator (y compris les objets imbriqués,
- * ex. `profil.telephone`) en dictionnaire indexé par nom de champ.
- * Les messages proviennent des décorateurs des DTO (en français).
+ * Flattens class-validator errors (including nested objects,
+ * e.g. `profil.telephone`) into a dictionary keyed by field name.
+ * Messages come from the DTO decorators (in French).
  */
 export function buildFieldErrors(
-  erreurs: ValidationError[],
-  prefixe = "",
+  errors: ValidationError[],
+  prefix = "",
 ): Record<string, string[]> {
-  const parChamp: Record<string, string[]> = {};
-  for (const erreur of erreurs) {
-    const chemin = prefixe ? `${prefixe}.${erreur.property}` : erreur.property;
-    const messages = erreur.constraints
-      ? Object.values(erreur.constraints)
+  const byField: Record<string, string[]> = {};
+  for (const error of errors) {
+    const path = prefix ? `${prefix}.${error.property}` : error.property;
+    const messages = error.constraints
+      ? Object.values(error.constraints)
       : [];
     if (messages.length) {
-      parChamp[chemin] = [...(parChamp[chemin] ?? []), ...messages];
+      byField[path] = [...(byField[path] ?? []), ...messages];
     }
-    if (erreur.children?.length) {
-      Object.assign(parChamp, buildFieldErrors(erreur.children, chemin));
+    if (error.children?.length) {
+      Object.assign(byField, buildFieldErrors(error.children, path));
     }
   }
-  return parChamp;
+  return byField;
 }
 
-/** Exception de validation au format consommé par le filtre global et le frontend. */
-export function createValidationException(erreurs: ValidationError[]) {
+/** Validation exception in the shape consumed by the global filter and the frontend. */
+export function createValidationException(errors: ValidationError[]) {
   return new BadRequestException({
     message: "Données invalides.",
-    errors: buildFieldErrors(erreurs),
+    errors: buildFieldErrors(errors),
   });
 }

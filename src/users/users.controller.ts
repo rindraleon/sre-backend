@@ -29,7 +29,7 @@ import { UsersService } from "./users.service";
 @Roles(AccountRole.ADMIN)
 export class UsersController {
   constructor(
-    private readonly utilisateurs: UsersService,
+    private readonly users: UsersService,
     private readonly activation: ActivationService,
   ) {}
 
@@ -39,15 +39,15 @@ export class UsersController {
   @ApiQuery({ name: "page", required: false, type: Number, example: 1 })
   @ApiQuery({ name: "parPage", required: false, type: Number, example: 25, description: "Maximum 100 comptes par page." })
   @ApiResponse({ status: 200, description: "Page de comptes sans mot de passe ni secret." })
-  lister(
-    @Query("recherche") recherche?: string,
+  list(
+    @Query("recherche") search?: string,
     @Query("page") page?: string,
-    @Query("parPage") parPage?: string,
+    @Query("parPage") perPage?: string,
   ) {
-    return this.utilisateurs.lister(
-      recherche,
+    return this.users.list(
+      search,
       Number(page) || 1,
-      Number(parPage) || 25,
+      Number(perPage) || 25,
     );
   }
 
@@ -56,8 +56,8 @@ export class UsersController {
     summary: "Lister les courriels de première connexion avec leur statut d'envoi.",
   })
   @ApiResponse({ status: 200, description: "Courriels d'activation (statut, tentatives, erreur)." })
-  listerEmailsActivation() {
-    return this.activation.listerDemandes();
+  listActivationEmails() {
+    return this.activation.listRequests();
   }
 
   @Post("emails-activation/:id/renvoyer")
@@ -69,8 +69,8 @@ export class UsersController {
   @ApiResponse({ status: 201, description: "Courriel renvoyé, statut mis à jour." })
   @ApiResponse({ status: 404, description: "Courriel d'activation introuvable." })
   @HttpCode(HttpStatus.CREATED)
-  renvoyerEmailActivation(@Param("id", new ParseUUIDPipe()) id: string) {
-    return this.activation.renvoyer(id);
+  resendEmailActivation(@Param("id", new ParseUUIDPipe()) id: string) {
+    return this.activation.resend(id);
   }
 
   @Patch(":id/statut")
@@ -82,11 +82,11 @@ export class UsersController {
   @ApiResponse({ status: 400, description: "Statut invalide ou tentative de désactiver son propre compte." })
   @ApiResponse({ status: 404, description: "Compte introuvable dans le périmètre." })
   @ApiResponse({ status: 409, description: "Le dernier administrateur actif ne peut pas être désactivé." })
-  modifierStatut(
+  updateStatus(
     @Param("id", new ParseUUIDPipe()) id: string,
-    @Body() donnees: UpdateUserStatusDto,
-    @CurrentUser() acteur: AuthenticatedUser,
+    @Body() data: UpdateUserStatusDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.utilisateurs.modifierStatut(id, donnees.statut, acteur);
+    return this.users.updateStatus(id, data.statut, actor);
   }
 }

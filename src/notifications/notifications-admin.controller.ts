@@ -16,15 +16,15 @@ import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
 import { CampaignService } from "./campaign.service";
-import { CampagneNotificationDto } from "./dto/campagne-notification.dto";
+import { NotificationCampaignDto } from "./dto/notification-campaign.dto";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { UserEntity } from "../database/entities/user.entity";
 
 /**
- * Administration : suivi des retards et campagnes de notifications groupées.
- * Réservé aux comptes administrateurs ; toutes les opérations sont validées
- * côté serveur et tracées (auteur, destinataires, statuts d'envoi).
+ * Administration: overdue tracking and bulk notification campaigns.
+ * Restricted to administrator accounts; every operation is validated
+ * server-side and traced (author, recipients, delivery statuses).
  */
 @ApiTags("Administration — retards et notifications")
 @ApiBearerAuth()
@@ -33,9 +33,9 @@ import { UserEntity } from "../database/entities/user.entity";
 @Roles(AccountRole.ADMIN)
 export class NotificationsAdminController {
   constructor(
-    private readonly campagnes: CampaignService,
+    private readonly campaigns: CampaignService,
     @InjectRepository(UserEntity)
-    private readonly utilisateurs: Repository<UserEntity>,
+    private readonly users: Repository<UserEntity>,
   ) {}
 
   @Get("retards")
@@ -45,18 +45,18 @@ export class NotificationsAdminController {
       "Calculés depuis les dates d'échéance et les statuts enregistrés. Les dossiers régularisés sont exclus par défaut (inclureRegularises=true pour les afficher).",
   })
   @ApiResponse({ status: 200, description: "Lignes de suivi des retards." })
-  listerRetards(
-    @Query("recherche") recherche?: string,
+  listOverdue(
+    @Query("recherche") search?: string,
     @Query("situation") situation?: string,
     @Query("type") type?: string,
-    @Query("inclureRegularises") inclureRegularises?: string,
+    @Query("inclureRegularises") includeSettled?: string,
   ) {
-    return this.campagnes.listerRetards({
-      recherche,
+    return this.campaigns.listOverdue({
+      search,
       situation,
       type,
-      inclureRegularises:
-        inclureRegularises === "true" || inclureRegularises === "1",
+      includeSettled:
+        includeSettled === "true" || includeSettled === "1",
     });
   }
 
@@ -68,18 +68,18 @@ export class NotificationsAdminController {
   })
   @ApiResponse({ status: 201, description: "Récapitulatif de la campagne." })
   @HttpCode(HttpStatus.CREATED)
-  async envoyerCampagne(
-    @CurrentUser() utilisateur: AuthenticatedUser,
-    @Body() donnees: CampagneNotificationDto,
+  async sendCampaign(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() data: NotificationCampaignDto,
   ) {
-    const administrateur = await this.utilisateurs.findOneByOrFail({
-      id: utilisateur.id,
+    const administrator = await this.users.findOneByOrFail({
+      id: user.id,
     });
-    return this.campagnes.envoyerCampagne(
-      administrateur,
-      donnees.obligationIds,
-      donnees.message,
-      donnees.titre,
+    return this.campaigns.sendCampaign(
+      administrator,
+      data.obligationIds,
+      data.message,
+      data.titre,
     );
   }
 
@@ -90,7 +90,7 @@ export class NotificationsAdminController {
       "Destinataire, dossier, message, date, administrateur à l'origine de l'action et statut d'envoi.",
   })
   @ApiResponse({ status: 200, description: "Historique des envois groupés." })
-  historiqueEnvois() {
-    return this.campagnes.historiqueEnvois();
+  dispatchHistory() {
+    return this.campaigns.dispatchHistory();
   }
 }

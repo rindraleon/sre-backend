@@ -2,11 +2,11 @@ import { AccountRole } from "../../database/enums";
 
 export interface AuthenticatedUser {
   id: string;
-  courriel: string;
-  nom: string;
+  email: string;
+  name: string;
   role: AccountRole;
-  contribuableId?: string;
-  changementMotDePasseRequis: boolean;
-  /** Profil complété / vérifié (configuration initiale). */
-  profilComplete: boolean;
+  taxpayerId?: string;
+  mustChangePassword: boolean;
+  /** Profile completed / verified (initial setup). */
+  isProfileComplete: boolean;
 }

@@ -26,7 +26,7 @@ import { PaymentsService } from "./payments.service";
 @Controller("paiements")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class PaymentsController {
-  constructor(private readonly paiements: PaymentsService) {}
+  constructor(private readonly payments: PaymentsService) {}
 
   @Post()
   @ApiOperation({
@@ -39,19 +39,19 @@ export class PaymentsController {
   @ApiResponse({ status: 404, description: "Obligation absente ou inaccessible." })
   @ApiResponse({ status: 409, description: "Une déclaration existe déjà ou l'obligation n'est pas éligible." })
   @Roles(AccountRole.CLIENT)
-  creerDeclaration(
-    @CurrentUser() utilisateur: AuthenticatedUser,
-    @Body() donnees: CreatePaymentDto,
+  createDeclaration(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() data: CreatePaymentDto,
   ) {
-    return this.paiements.creerDeclaration(utilisateur, donnees);
+    return this.payments.createDeclaration(user, data);
   }
 
   @Get("miennes")
   @ApiOperation({ summary: "Lister les déclarations du contribuable authentifié." })
   @ApiResponse({ status: 200, description: "Déclarations du compte, avec leur historique et les documents disponibles." })
   @Roles(AccountRole.CLIENT)
-  listerMesPaiements(@CurrentUser() utilisateur: AuthenticatedUser) {
-    return this.paiements.listerMesPaiements(utilisateur);
+  listMyPayments(@CurrentUser() user: AuthenticatedUser) {
+    return this.payments.listMyPayments(user);
   }
 
   @Get()
@@ -62,22 +62,22 @@ export class PaymentsController {
   @ApiResponse({ status: 200, description: "Page de déclarations selon les filtres." })
   @ApiResponse({ status: 400, description: "Filtre de statut invalide." })
   @Roles(AccountRole.ADMIN)
-  listerPourAdministration(
-    @Query("statut") statut?: string,
+  listForAdministration(
+    @Query("statut") status?: string,
     @Query("page") page?: string,
-    @Query("parPage") parPage?: string,
+    @Query("parPage") perPage?: string,
   ) {
-    let statutFiltre: PaymentStatus | undefined;
-    if (statut) {
-      if (!Object.values(PaymentStatus).includes(statut as PaymentStatus)) {
+    let statusFilter: PaymentStatus | undefined;
+    if (status) {
+      if (!Object.values(PaymentStatus).includes(status as PaymentStatus)) {
         throw new BadRequestException("Filtre de statut invalide.");
       }
-      statutFiltre = statut as PaymentStatus;
+      statusFilter = status as PaymentStatus;
     }
-    return this.paiements.listerPourAdministration(
-      statutFiltre,
+    return this.payments.listForAdministration(
+      statusFilter,
       Number(page) || 1,
-      Number(parPage) || 25,
+      Number(perPage) || 25,
     );
   }
 
@@ -92,22 +92,22 @@ export class PaymentsController {
   @ApiResponse({ status: 404, description: "Déclaration introuvable dans le périmètre." })
   @ApiResponse({ status: 409, description: "Une décision a déjà été enregistrée." })
   @Roles(AccountRole.ADMIN)
-  decider(
+  decide(
     @Param("id", new ParseUUIDPipe()) id: string,
-    @CurrentUser() utilisateur: AuthenticatedUser,
-    @Body() donnees: PaymentDecisionDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() data: PaymentDecisionDto,
   ) {
-    return this.paiements.decider(id, utilisateur, donnees);
+    return this.payments.decide(id, user, data);
   }
 
   @Get(":id")
   @ApiOperation({ summary: "Consulter une déclaration accessible à l'utilisateur courant." })
   @ApiResponse({ status: 200, description: "Déclaration, historique métier et documents associés." })
   @ApiResponse({ status: 404, description: "Déclaration introuvable ou hors périmètre." })
-  obtenirUne(
+  getOne(
     @Param("id", new ParseUUIDPipe()) id: string,
-    @CurrentUser() utilisateur: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.paiements.obtenirUne(id, utilisateur);
+    return this.payments.getOne(id, user);
   }
 }

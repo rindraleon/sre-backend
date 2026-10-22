@@ -4,8 +4,8 @@ import { IsString, Length, Matches, ValidateNested } from "class-validator";
 import { UpdateTaxpayerProfileDto } from "../../taxpayers/dto/update-taxpayer-profile.dto";
 
 /**
- * Confirmation d'un lien d'activation à usage unique : définition directe du
- * mot de passe personnel (sans saisir le mot de passe provisoire).
+ * Confirmation of a single-use activation link: direct setting of the
+ * personal password (without entering the provisional password).
  */
 export class ActivationConfirmationDto {
   @ApiProperty({

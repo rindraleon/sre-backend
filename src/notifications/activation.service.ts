@@ -18,12 +18,12 @@ import {
 } from "../database/enums";
 import { MAIL_SERVICE, MailSender, buildEmailHtml } from "./mail.service";
 
-/** Empreinte SHA-256 d'un jeton (le jeton en clair n'est jamais stocké). */
-export function empreinteJeton(jeton: string): string {
-  return createHash("sha256").update(jeton).digest("hex");
+/** SHA-256 fingerprint of a token (the plain token is never stored). */
+export function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
-export interface DemandeActivationVue {
+export interface ActivationRequestView {
   id: string;
   utilisateurId: string;
   nom: string;
@@ -39,31 +39,31 @@ export interface DemandeActivationVue {
 }
 
 /**
- * Jetons d'activation / de réinitialisation à usage limité et à expiration
- * contrôlée, et envoi suivi des courriels de première connexion.
- * - le jeton en clair n'existe que dans le courriel (empreinte SHA-256 stockée) ;
- * - chaque envoi est suivi (statut, tentatives, erreur) et réessayable ;
- * - un jeton consommé ou expiré est refusé, sans exception.
+ * Single-purpose activation / reset tokens with controlled expiry,
+ * and tracked sending of first-sign-in e-mails.
+ * - the plain token only exists in the e-mail (SHA-256 fingerprint stored);
+ * - every send is tracked (status, attempts, error) and retryable;
+ * - a consumed or expired token is rejected, without exception.
  */
 @Injectable()
 export class ActivationService {
-  private readonly journal = new Logger(ActivationService.name);
+  private readonly activityLog = new Logger(ActivationService.name);
 
   constructor(
     @InjectRepository(ActivationRequestEntity)
-    private readonly demandes: Repository<ActivationRequestEntity>,
+    private readonly requests: Repository<ActivationRequestEntity>,
     private readonly configuration: ConfigService,
-    @Inject(MAIL_SERVICE) private readonly courriels: MailSender,
+    @Inject(MAIL_SERVICE) private readonly emails: MailSender,
   ) {}
 
-  private dureeValiditeMs(): number {
-    const heures = Number(
+  private validityDurationMs(): number {
+    const hours = Number(
       this.configuration.get<string>("ACTIVATION_TOKEN_TTL_HOURS", "72"),
     );
-    return Math.max(1, heures) * 60 * 60 * 1000;
+    return Math.max(1, hours) * 60 * 60 * 1000;
   }
 
-  private adresseApplication(): string {
+  private getAppBaseUrl(): string {
     return (
       this.configuration.get<string>("APP_URL", "").trim().replace(/\/+$/, "") ||
       ""
@@ -71,94 +71,94 @@ export class ActivationService {
   }
 
   /**
-   * Crée la demande d'activation d'un compte (jeton + courriel de première
-   * connexion) et tente l'envoi immédiat. Retourne la vue de la demande,
-   * jamais le jeton en clair.
+   * Creates an account's activation request (token + first-sign-in
+   * e-mail) and attempts immediate sending. Returns the request view,
+   * never the plain token.
    */
-  async creerDemandeActivation(
-    utilisateur: UserEntity,
-    libelle: string,
-    numeroStatProvisoire?: string | null,
-  ): Promise<DemandeActivationVue> {
-    const ancienne = await this.demandes.findOne({
+  async createActivationRequest(
+    user: UserEntity,
+    label: string,
+    temporaryStatNumber?: string | null,
+  ): Promise<ActivationRequestView> {
+    const previous = await this.requests.findOne({
       where: {
-        utilisateurId: utilisateur.id,
+        userId: user.id,
         type: ActivationTokenType.ACTIVATION,
-        utiliseLe: IsNull(),
+        usedAt: IsNull(),
       },
-      order: { creeLe: "DESC" },
+      order: { createdAt: "DESC" },
     });
-    if (ancienne && ancienne.expireLe.getTime() > Date.now()) {
-      // Idempotence : réutilise la demande active au lieu d'en créer une seconde.
-      await this.envoyerCourrielActivation(ancienne.id);
-      return this.vue(await this.recharger(ancienne.id));
+    if (previous && previous.expiresAt.getTime() > Date.now()) {
+      // Idempotency: reuse the active request instead of creating a second one.
+      await this.sendActivationEmail(previous.id);
+      return this.toActivationRequestView(await this.reload(previous.id));
     }
 
-    const jeton = randomBytes(32).toString("hex");
-    const demande = this.demandes.create({
-      utilisateur,
-      utilisateurId: utilisateur.id,
+    const token = randomBytes(32).toString("hex");
+    const request = this.requests.create({
+      user,
+      userId: user.id,
       type: ActivationTokenType.ACTIVATION,
-      jetonHash: empreinteJeton(jeton),
-      expireLe: new Date(Date.now() + this.dureeValiditeMs()),
-      utiliseLe: null,
-      destinataire: utilisateur.courriel,
-      statutCourriel: ActivationEmailStatus.EN_ATTENTE,
-      tentativesEnvoi: 0,
+      tokenHash: hashToken(token),
+      expiresAt: new Date(Date.now() + this.validityDurationMs()),
+      usedAt: null,
+      recipient: user.email,
+      emailStatus: ActivationEmailStatus.PENDING,
+      dispatchAttempts: 0,
     });
-    const enregistree = await this.demandes.save(demande);
-    await this.envoyerCourrielActivation(enregistree.id, jeton, libelle, numeroStatProvisoire);
-    return this.vue(await this.recharger(enregistree.id));
+    const saved = await this.requests.save(request);
+    await this.sendActivationEmail(saved.id, token, label, temporaryStatNumber);
+    return this.toActivationRequestView(await this.reload(saved.id));
   }
 
-  /** (Ré)envoie le courriel lié à une demande et met à jour le suivi d'envoi. */
-  async envoyerCourrielActivation(
-    demandeId: string,
-    jetonConnu?: string,
-    libelleConnu?: string,
-    statProvisoire?: string | null,
-  ): Promise<DemandeActivationVue> {
-    const demande = await this.recharger(demandeId);
-    const utilisateur = demande.utilisateur;
-    const jeton =
-      jetonConnu ??
-      // En réessai, le jeton en clair n'est plus disponible : un nouveau jeton
-      // est émis (le précédent est invalidé) pour ne jamais réutiliser d'empreinte
-      // ni stocker de secret en clair.
-      this.emettreNouveauJeton(demande);
-    const libelle =
-      libelleConnu ??
-      utilisateur.contribuable?.raisonSociale ??
-      utilisateur.contribuable?.nom ??
-      utilisateur.nom;
-    const appUrl = this.adresseApplication();
-    const lienActivation = `${appUrl}/activation?jeton=${jeton}`;
-    const lienSite = appUrl || "#";
-    const motProvisoire = statProvisoire ?? null;
+  /** (Re)sends the e-mail linked to a request and updates delivery tracking. */
+  async sendActivationEmail(
+    requestId: string,
+    knownToken?: string,
+    knownLabel?: string,
+    statTemporary?: string | null,
+  ): Promise<ActivationRequestView> {
+    const request = await this.reload(requestId);
+    const user = request.user;
+    const token =
+      knownToken ??
+      // On retry, the plain token is no longer available: a new token
+      // is issued (the previous one is invalidated) so a fingerprint is never reused
+      // and no secret is ever stored in plain text.
+      this.issueNewToken(request);
+    const label =
+      knownLabel ??
+      user.taxpayer?.legalName ??
+      user.taxpayer?.lastName ??
+      user.name;
+    const appUrl = this.getAppBaseUrl();
+    const activationLink = `${appUrl}/activation?jeton=${token}`;
+    const websiteLink = appUrl || "#";
+    const motTemporary = statTemporary ?? null;
 
-    demande.tentativesEnvoi += 1;
-    demande.derniereTentativeLe = new Date();
+    request.dispatchAttempts += 1;
+    request.lastAttemptAt = new Date();
     try {
-      await this.courriels.envoyer({
-        destinataire: demande.destinataire,
-        nomDestinataire: libelle,
-        sujet: "Portail SRE — activation de votre espace entreprise",
-        texte: [
-          `Bonjour ${libelle},`,
+      await this.emails.send({
+        recipient: request.recipient,
+        recipientName: label,
+        subject: "Portail SRE — activation de votre espace entreprise",
+        text: [
+          `Bonjour ${label},`,
           "",
           "Votre espace entreprise a été créé sur le portail SRE.",
-          `Adresse e-mail de connexion : ${demande.destinataire}`,
-          motProvisoire
-            ? `Mot de passe provisoire : ${motProvisoire} (temporaire — à changer dès la première connexion).`
+          `Adresse e-mail de connexion : ${request.recipient}`,
+          motTemporary
+            ? `Mot de passe provisoire : ${motTemporary} (temporaire — à changer dès la première connexion).`
             : "",
           "",
           "Première connexion (recommandée) : ouvrez le lien sécurisé ci-dessous",
           "pour définir votre mot de passe personnel et compléter votre profil :",
-          lienActivation,
-          `Ce lien est à usage unique et expire le ${demande.expireLe.toLocaleString("fr-FR")}.`,
+          activationLink,
+          `Ce lien est à usage unique et expire le ${request.expiresAt.toLocaleString("fr-FR")}.`,
           "",
           "Vous pouvez aussi vous connecter depuis le site officiel :",
-          lienSite,
+          websiteLink,
           "",
           "Tant que la configuration initiale n'est pas terminée, l'accès aux",
           "fonctionnalités métier reste bloqué.",
@@ -167,207 +167,207 @@ export class ActivationService {
         ]
           .filter(Boolean)
           .join("\n"),
-        html: this.courrielActivationHtml({
-          libelle,
-          destinataire: demande.destinataire,
-          motProvisoire,
-          lienActivation,
-          lienSite,
-          expireLe: demande.expireLe,
+        html: this.activationEmailHtml({
+          label,
+          recipient: request.recipient,
+          motTemporary,
+          activationLink,
+          websiteLink,
+          expiresAt: request.expiresAt,
         }),
       });
-      demande.statutCourriel = ActivationEmailStatus.ENVOYEE;
-      demande.derniereErreur = null;
+      request.emailStatus = ActivationEmailStatus.SENT;
+      request.lastError = null;
     } catch (cause) {
-      demande.statutCourriel = ActivationEmailStatus.ECHEC;
-      demande.derniereErreur =
+      request.emailStatus = ActivationEmailStatus.FAILED;
+      request.lastError =
         cause instanceof Error ? cause.message.slice(0, 254) : "Envoi impossible";
-      this.journal.warn(
-        `Envoi du courriel d'activation impossible pour ${demande.destinataire} : ${demande.derniereErreur}`,
+      this.activityLog.warn(
+        `Envoi du courriel d'activation impossible pour ${request.recipient} : ${request.lastError}`,
       );
     }
-    await this.demandes.save(demande);
-    return this.vue(demande);
+    await this.requests.save(request);
+    return this.toActivationRequestView(request);
   }
 
   /**
-   * Crée une demande de réinitialisation de mot de passe (jeton à usage
-   * unique) et envoie le courriel sécurisé. Aucune information sur
-   * l'existence du compte ne sort de cette méthode.
+   * Creates a password reset request (single-use
+   * token) and sends the secure e-mail. No information about
+   * the account's existence ever leaves this method.
    */
-  async creerDemandeReinitialisation(
-    utilisateur: UserEntity,
-  ): Promise<DemandeActivationVue> {
-    const jeton = randomBytes(32).toString("hex");
-    const demande = this.demandes.create({
-      utilisateur,
-      utilisateurId: utilisateur.id,
-      type: ActivationTokenType.REINITIALISATION,
-      jetonHash: empreinteJeton(jeton),
-      expireLe: new Date(
-        Date.now() + Math.min(this.dureeValiditeMs(), 24 * 60 * 60 * 1000),
+  async createPasswordResetRequest(
+    user: UserEntity,
+  ): Promise<ActivationRequestView> {
+    const token = randomBytes(32).toString("hex");
+    const request = this.requests.create({
+      user,
+      userId: user.id,
+      type: ActivationTokenType.PASSWORD_RESET,
+      tokenHash: hashToken(token),
+      expiresAt: new Date(
+        Date.now() + Math.min(this.validityDurationMs(), 24 * 60 * 60 * 1000),
       ),
-      utiliseLe: null,
-      destinataire: utilisateur.courriel,
-      statutCourriel: ActivationEmailStatus.EN_ATTENTE,
-      tentativesEnvoi: 0,
+      usedAt: null,
+      recipient: user.email,
+      emailStatus: ActivationEmailStatus.PENDING,
+      dispatchAttempts: 0,
     });
-    await this.demandes.save(demande);
-    const appUrl = this.adresseApplication();
-    const lien = `${appUrl}/reinitialisation-mot-de-passe?jeton=${jeton}`;
-    demande.tentativesEnvoi += 1;
-    demande.derniereTentativeLe = new Date();
+    await this.requests.save(request);
+    const appUrl = this.getAppBaseUrl();
+    const link = `${appUrl}/reinitialisation-mot-de-passe?jeton=${token}`;
+    request.dispatchAttempts += 1;
+    request.lastAttemptAt = new Date();
     try {
-      await this.courriels.envoyer({
-        destinataire: demande.destinataire,
-        nomDestinataire: utilisateur.nom,
-        sujet: "Portail SRE — réinitialisation de votre mot de passe",
-        texte: [
-          `Bonjour ${utilisateur.nom},`,
+      await this.emails.send({
+        recipient: request.recipient,
+        recipientName: user.name,
+        subject: "Portail SRE — réinitialisation de votre mot de passe",
+        text: [
+          `Bonjour ${user.name},`,
           "",
           "Une réinitialisation de mot de passe a été demandée pour votre compte.",
           "Ouvrez le lien sécurisé ci-dessous pour définir un nouveau mot de passe :",
-          lien,
-          `Ce lien est à usage unique et expire le ${demande.expireLe.toLocaleString("fr-FR")}.`,
+          link,
+          `Ce lien est à usage unique et expire le ${request.expiresAt.toLocaleString("fr-FR")}.`,
           "",
           "Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.",
           "",
           "Message automatique du portail SRE. Ne répondez pas à cet e-mail.",
         ].join("\n"),
         html: buildEmailHtml({
-          nomDestinataire: utilisateur.nom,
-          titre: "Réinitialisation de votre mot de passe",
-          message: `Ouvrez ce lien sécurisé pour définir un nouveau mot de passe. Il est à usage unique et expire le ${demande.expireLe.toLocaleString("fr-FR")}. Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.`,
-          lienApplication: lien,
-          libelleLien: "Réinitialiser mon mot de passe",
+          recipientName: user.name,
+          title: "Réinitialisation de votre mot de passe",
+          message: `Ouvrez ce lien sécurisé pour définir un nouveau mot de passe. Il est à usage unique et expire le ${request.expiresAt.toLocaleString("fr-FR")}. Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.`,
+          appLink: link,
+          linkLabel: "Réinitialiser mon mot de passe",
         }),
       });
-      demande.statutCourriel = ActivationEmailStatus.ENVOYEE;
-      demande.derniereErreur = null;
+      request.emailStatus = ActivationEmailStatus.SENT;
+      request.lastError = null;
     } catch (cause) {
-      demande.statutCourriel = ActivationEmailStatus.ECHEC;
-      demande.derniereErreur =
+      request.emailStatus = ActivationEmailStatus.FAILED;
+      request.lastError =
         cause instanceof Error ? cause.message.slice(0, 254) : "Envoi impossible";
     }
-    await this.demandes.save(demande);
-    return this.vue(demande);
+    await this.requests.save(request);
+    return this.toActivationRequestView(request);
   }
 
-  /** Admin : liste des courriels d'activation avec statut d'envoi. */
-  async listerDemandes(): Promise<DemandeActivationVue[]> {
-    const liste = await this.demandes.find({
-      relations: { utilisateur: { contribuable: true } },
-      order: { creeLe: "DESC" },
+  /** Admin: list of activation e-mails with delivery status. */
+  async listRequests(): Promise<ActivationRequestView[]> {
+    const list = await this.requests.find({
+      relations: { user: { taxpayer: true } },
+      order: { createdAt: "DESC" },
     });
-    return liste.map((demande) => this.vue(demande));
+    return list.map((request) => this.toActivationRequestView(request));
   }
 
-  /** Admin : réessai d'envoi d'un courriel d'activation en échec. */
-  async renvoyer(demandeId: string): Promise<DemandeActivationVue> {
-    const demande = await this.demandes.findOne({
-      where: { id: demandeId },
+  /** Admin: retry sending a failed activation e-mail. */
+  async resend(requestId: string): Promise<ActivationRequestView> {
+    const request = await this.requests.findOne({
+      where: { id: requestId },
     });
-    if (!demande) throw new NotFoundException("Courriel d'activation introuvable.");
-    return this.envoyerCourrielActivation(demandeId);
+    if (!request) throw new NotFoundException("Courriel d'activation introuvable.");
+    return this.sendActivationEmail(requestId);
   }
 
   /**
-   * Valide un jeton (type, expiration, usage unique) et retourne la demande.
-   * `consumer` marque le jeton comme utilisé (à appeler après traitement).
+   * Validates a token (type, expiry, single use) and returns the request.
+   * `consume` marks the token as used (call after processing).
    */
-  async validerJeton(
-    jeton: string,
+  async validateToken(
+    token: string,
     type: ActivationTokenType,
-    consumer = false,
+    consume = false,
   ): Promise<ActivationRequestEntity> {
-    const demande = await this.demandes.findOne({
-      where: { jetonHash: empreinteJeton(jeton.trim()) },
-      relations: { utilisateur: true },
+    const request = await this.requests.findOne({
+      where: { tokenHash: hashToken(token.trim()) },
+      relations: { user: true },
     });
     if (
-      !demande ||
-      demande.type !== type ||
-      demande.utiliseLe !== null ||
-      demande.expireLe.getTime() < Date.now()
+      !request ||
+      request.type !== type ||
+      request.usedAt !== null ||
+      request.expiresAt.getTime() < Date.now()
     ) {
       throw new NotFoundException(
         "Lien invalide, déjà utilisé ou expiré. Demandez un nouveau lien.",
       );
     }
-    if (consumer) {
-      demande.utiliseLe = new Date();
-      await this.demandes.save(demande);
+    if (consume) {
+      request.usedAt = new Date();
+      await this.requests.save(request);
     }
-    return demande;
+    return request;
   }
 
-  /** Remplace l'empreinte d'une demande active par un jeton neuf (réessai). */
-  private emettreNouveauJeton(demande: ActivationRequestEntity): string {
-    const jeton = randomBytes(32).toString("hex");
-    demande.jetonHash = empreinteJeton(jeton);
-    if (demande.expireLe.getTime() < Date.now()) {
-      demande.expireLe = new Date(Date.now() + this.dureeValiditeMs());
+  /** Replaces an active request's fingerprint with a fresh token (retry). */
+  private issueNewToken(request: ActivationRequestEntity): string {
+    const token = randomBytes(32).toString("hex");
+    request.tokenHash = hashToken(token);
+    if (request.expiresAt.getTime() < Date.now()) {
+      request.expiresAt = new Date(Date.now() + this.validityDurationMs());
     }
-    return jeton;
+    return token;
   }
 
-  private async recharger(id: string): Promise<ActivationRequestEntity> {
-    const demande = await this.demandes.findOne({
+  private async reload(id: string): Promise<ActivationRequestEntity> {
+    const request = await this.requests.findOne({
       where: { id },
-      relations: { utilisateur: { contribuable: true } },
+      relations: { user: { taxpayer: true } },
     });
-    if (!demande) throw new NotFoundException("Courriel d'activation introuvable.");
-    return demande;
+    if (!request) throw new NotFoundException("Courriel d'activation introuvable.");
+    return request;
   }
 
-  private vue(demande: ActivationRequestEntity): DemandeActivationVue {
-    const utilisateur = demande.utilisateur;
+  private toActivationRequestView(request: ActivationRequestEntity): ActivationRequestView {
+    const user = request.user;
     return {
-      id: demande.id,
-      utilisateurId: demande.utilisateurId,
+      id: request.id,
+      utilisateurId: request.userId,
       nom:
-        utilisateur?.contribuable?.raisonSociale ??
-        utilisateur?.contribuable?.nom ??
-        utilisateur?.nom ??
+        user?.taxpayer?.legalName ??
+        user?.taxpayer?.lastName ??
+        user?.name ??
         "",
-      destinataire: demande.destinataire,
-      type: demande.type,
-      statutCourriel: demande.statutCourriel,
-      tentativesEnvoi: demande.tentativesEnvoi,
-      derniereTentativeLe: demande.derniereTentativeLe,
-      derniereErreur: demande.derniereErreur,
-      expireLe: demande.expireLe,
-      utiliseLe: demande.utiliseLe,
-      creeLe: demande.creeLe,
+      destinataire: request.recipient,
+      type: request.type,
+      statutCourriel: request.emailStatus,
+      tentativesEnvoi: request.dispatchAttempts,
+      derniereTentativeLe: request.lastAttemptAt,
+      derniereErreur: request.lastError,
+      expireLe: request.expiresAt,
+      utiliseLe: request.usedAt,
+      creeLe: request.createdAt,
     };
   }
 
-  private courrielActivationHtml(parametres: {
-    libelle: string;
-    destinataire: string;
-    motProvisoire: string | null;
-    lienActivation: string;
-    lienSite: string;
-    expireLe: Date;
+  private activationEmailHtml(emailParams: {
+    label: string;
+    recipient: string;
+    motTemporary: string | null;
+    activationLink: string;
+    websiteLink: string;
+    expiresAt: Date;
   }): string {
-    const e = (valeur: string) =>
-      valeur
+    const e = (value: string) =>
+      value
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;");
-    const credentiel = parametres.motProvisoire
-      ? `<p><strong>Adresse e-mail :</strong> ${e(parametres.destinataire)}<br/><strong>Mot de passe provisoire :</strong> ${e(parametres.motProvisoire)} <em>(temporaire — à changer dès la première connexion)</em></p>`
-      : `<p><strong>Adresse e-mail :</strong> ${e(parametres.destinataire)}</p>`;
+    const credential = emailParams.motTemporary
+      ? `<p><strong>Adresse e-mail :</strong> ${e(emailParams.recipient)}<br/><strong>Mot de passe provisoire :</strong> ${e(emailParams.motTemporary)} <em>(temporaire — à changer dès la première connexion)</em></p>`
+      : `<p><strong>Adresse e-mail :</strong> ${e(emailParams.recipient)}</p>`;
     return `<!doctype html><html lang="fr"><body style="font-family:Arial,sans-serif;color:#18283c;line-height:1.55">
-<p>Bonjour ${e(parametres.libelle)},</p>
+<p>Bonjour ${e(emailParams.label)},</p>
 <h1 style="font-size:18px">Votre espace entreprise est prêt</h1>
 <p>Votre compte a été créé sur le portail SRE. Voici vos informations d'accès :</p>
-${credentiel}
+${credential}
 <p><strong>Première connexion (recommandée)</strong> : ouvrez ce lien sécurisé pour définir votre mot de passe personnel et compléter votre profil :</p>
-<p style="margin:18px 0"><a href="${e(parametres.lienActivation)}" style="background:#1d6a50;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">Activer mon espace</a></p>
-<p style="font-size:12px;color:#5b6b7a">Ce lien est à usage unique et expire le ${e(parametres.expireLe.toLocaleString("fr-FR"))}.</p>
-<p>Vous pouvez aussi vous connecter depuis le site officiel : <a href="${e(parametres.lienSite)}">${e(parametres.lienSite)}</a></p>
+<p style="margin:18px 0"><a href="${e(emailParams.activationLink)}" style="background:#1d6a50;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">Activer mon espace</a></p>
+<p style="font-size:12px;color:#5b6b7a">Ce lien est à usage unique et expire le ${e(emailParams.expiresAt.toLocaleString("fr-FR"))}.</p>
+<p>Vous pouvez aussi vous connecter depuis le site officiel : <a href="${e(emailParams.websiteLink)}">${e(emailParams.websiteLink)}</a></p>
 <p>Tant que la configuration initiale n'est pas terminée, l'accès aux fonctionnalités métier reste bloqué.</p>
 <p style="font-size:12px;color:#5b6b7a">Message automatique du portail SRE. Ne répondez pas à cet e-mail et ne transmettez jamais votre mot de passe.</p>
 </body></html>`;

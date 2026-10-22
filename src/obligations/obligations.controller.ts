@@ -28,16 +28,16 @@ export class ObligationsController {
   @ApiOperation({ summary: "Lister les obligations fiscales du contribuable authentifié." })
   @ApiResponse({ status: 200, description: "Obligations et échéances liées au profil du compte." })
   @Roles(AccountRole.CLIENT)
-  listerMesObligations(@CurrentUser() utilisateur: AuthenticatedUser) {
-    return this.obligations.listerPourClient(utilisateur.contribuableId ?? "");
+  listMyObligations(@CurrentUser() user: AuthenticatedUser) {
+    return this.obligations.listForClient(user.taxpayerId ?? "");
   }
 
   @Get()
   @ApiOperation({ summary: "Lister les obligations fiscales du périmètre Haute Matsiatra." })
   @ApiResponse({ status: 200, description: "Liste des obligations avec leur contribuable." })
   @Roles(AccountRole.ADMIN)
-  listerToutes() {
-    return this.obligations.listerPourAdministration();
+  listAll() {
+    return this.obligations.listForAdministration();
   }
 
   @Post()
@@ -47,8 +47,8 @@ export class ObligationsController {
   @ApiResponse({ status: 404, description: "Contribuable ou type d'impôt actif introuvable." })
   @ApiResponse({ status: 409, description: "Référence d'obligation déjà utilisée." })
   @Roles(AccountRole.ADMIN)
-  creer(@Body() donnees: CreateObligationDto) {
-    return this.obligations.creer(donnees);
+  create(@Body() data: CreateObligationDto) {
+    return this.obligations.create(data);
   }
 
   @Get(":id")
@@ -56,10 +56,10 @@ export class ObligationsController {
   @ApiResponse({ status: 200, description: "Détails de l'obligation." })
   @ApiResponse({ status: 403, description: "L'obligation ne correspond pas au contribuable connecté." })
   @ApiResponse({ status: 404, description: "Obligation introuvable." })
-  obtenirUne(
+  getOne(
     @Param("id", new ParseUUIDPipe()) id: string,
-    @CurrentUser() utilisateur: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.obligations.obtenirUne(id, utilisateur);
+    return this.obligations.getOne(id, user);
   }
 }

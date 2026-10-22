@@ -13,15 +13,17 @@ import { PaymentEntity } from "./payment.entity";
 import { UserEntity } from "./user.entity";
 
 @Entity({ name: "documents_paiement" })
-@Index("uq_documents_paiement_numero", ["numero"], { unique: true })
-@Index("uq_documents_paiement_type", ["paiement", "type"], { unique: true })
-@Index("idx_documents_contribuable_emis", ["contribuable", "emisLe"])
+@Index("uq_documents_paiement_numero", ["number"], { unique: true })
+@Index("uq_documents_paiement_type", ["payment", "type"], { unique: true })
+@Index("idx_documents_contribuable_emis", ["taxpayer", "issuedAt"])
 export class PaymentDocumentEntity {
   @PrimaryGeneratedColumn("uuid")
   id!: string;
 
-  @Column({ type: "varchar", length: 48 })
-  numero!: string;
+  @Column({
+      name: "numero",
+    type: "varchar", length: 48 })
+  number!: string;
 
   @Column({
     type: "enum",
@@ -31,43 +33,48 @@ export class PaymentDocumentEntity {
   type!: PaymentDocumentType;
 
   @Column({
+      name: "statut",
     type: "enum",
     enum: DocumentStatus,
     enumName: "statut_document_enum",
-    default: DocumentStatus.VALIDE,
+    default: DocumentStatus.VALID,
   })
-  statut!: DocumentStatus;
+  status!: DocumentStatus;
 
-  @ManyToOne(() => PaymentEntity, (paiement) => paiement.documents, {
+  @ManyToOne(() => PaymentEntity, (payment) => payment.documents, {
     nullable: false,
     onDelete: "CASCADE",
   })
   @JoinColumn({ name: "paiement_id" })
-  paiement!: PaymentEntity;
+  payment!: PaymentEntity;
 
   @ManyToOne(() => TaxpayerEntity, { nullable: false, onDelete: "CASCADE" })
   @JoinColumn({ name: "contribuable_id" })
-  contribuable!: TaxpayerEntity;
+  taxpayer!: TaxpayerEntity;
 
   @ManyToOne(() => UserEntity, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "emis_par_id" })
-  emisPar!: UserEntity | null;
+  issuedBy!: UserEntity | null;
 
   @Column({ name: "montant", type: "numeric", precision: 15, scale: 0 })
-  montant!: string;
+  amount!: string;
 
-  @Column({ type: "char", length: 3, default: "MGA" })
-  devise!: "MGA";
+  @Column({
+      name: "devise",
+    type: "char", length: 3, default: "MGA" })
+  currency!: "MGA";
 
   @Column({ name: "emetteur", type: "varchar", length: 180 })
-  emetteur!: string;
+  issuer!: string;
 
   @Column({ name: "mention", type: "text" })
   mention!: string;
 
-  @Column({ type: "jsonb" })
-  instantane!: Record<string, unknown>;
+  @Column({
+      name: "instantane",
+    type: "jsonb" })
+  snapshot!: Record<string, unknown>;
 
   @CreateDateColumn({ name: "emis_le", type: "timestamptz" })
-  emisLe!: Date;
+  issuedAt!: Date;
 }

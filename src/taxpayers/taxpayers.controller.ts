@@ -27,15 +27,15 @@ import { TaxpayersService } from "./taxpayers.service";
 @Controller("contribuables")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class TaxpayersController {
-  constructor(private readonly contribuables: TaxpayersService) {}
+  constructor(private readonly taxpayers: TaxpayersService) {}
 
   @Get("moi")
   @ApiOperation({ summary: "Consulter le profil contribuable lié à la session." })
   @ApiResponse({ status: 200, description: "Profil du titulaire du jeton." })
   @ApiResponse({ status: 404, description: "Aucun profil lié ou profil hors périmètre." })
   @Roles(AccountRole.CLIENT)
-  obtenirMonProfil(@CurrentUser() utilisateur: AuthenticatedUser) {
-    return this.contribuables.obtenirMonProfil(utilisateur);
+  getMyProfile(@CurrentUser() user: AuthenticatedUser) {
+    return this.taxpayers.getMyProfile(user);
   }
 
   @Patch("moi")
@@ -44,11 +44,11 @@ export class TaxpayersController {
   @ApiResponse({ status: 400, description: "Données de profil invalides." })
   @ApiResponse({ status: 404, description: "Profil lié introuvable." })
   @Roles(AccountRole.CLIENT)
-  modifierMonProfil(
-    @CurrentUser() utilisateur: AuthenticatedUser,
-    @Body() donnees: UpdateTaxpayerProfileDto,
+  updateMyProfile(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() data: UpdateTaxpayerProfileDto,
   ) {
-    return this.contribuables.modifierMonProfil(utilisateur, donnees);
+    return this.taxpayers.updateMyProfile(user, data);
   }
 
   @Post("import")
@@ -64,8 +64,8 @@ export class TaxpayersController {
   })
   @ApiResponse({ status: 400, description: "Liste vide, trop volumineuse ou invalide." })
   @Roles(AccountRole.ADMIN)
-  importer(@Body() donnees: ImportTaxpayersDto) {
-    return this.contribuables.importer(donnees.profils);
+  importTaxpayers(@Body() data: ImportTaxpayersDto) {
+    return this.taxpayers.importTaxpayers(data.profils);
   }
 
   @Post()
@@ -74,8 +74,8 @@ export class TaxpayersController {
   @ApiResponse({ status: 400, description: "Données de contribuable invalides." })
   @ApiResponse({ status: 409, description: "Courriel, NIF ou STAT déjà utilisé." })
   @Roles(AccountRole.ADMIN)
-  creerPourAdministration(@Body() donnees: CreateTaxpayerDto) {
-    return this.contribuables.creerPourAdministration(donnees);
+  createForAdministration(@Body() data: CreateTaxpayerDto) {
+    return this.taxpayers.createForAdministration(data);
   }
 
   @Get()
@@ -85,15 +85,15 @@ export class TaxpayersController {
   @ApiQuery({ name: "parPage", required: false, type: Number, example: 25, description: "Maximum 100 lignes par page." })
   @ApiResponse({ status: 200, description: "Page des profils correspondant au filtre." })
   @Roles(AccountRole.ADMIN)
-  lister(
-    @Query("recherche") recherche?: string,
+  list(
+    @Query("recherche") search?: string,
     @Query("page") page?: string,
-    @Query("parPage") parPage?: string,
+    @Query("parPage") perPage?: string,
   ) {
-    return this.contribuables.lister(
-      recherche,
+    return this.taxpayers.list(
+      search,
       Number(page) || 1,
-      Number(parPage) || 25,
+      Number(perPage) || 25,
     );
   }
 
@@ -103,8 +103,8 @@ export class TaxpayersController {
   @ApiResponse({ status: 404, description: "Dossier introuvable." })
   @ApiResponse({ status: 409, description: "Compte lié ou historique fiscal empêchant la suppression." })
   @Roles(AccountRole.ADMIN)
-  supprimer(@Param("id", new ParseUUIDPipe()) id: string) {
-    return this.contribuables.supprimer(id);
+  remove(@Param("id", new ParseUUIDPipe()) id: string) {
+    return this.taxpayers.remove(id);
   }
 
   @Get(":id")
@@ -112,7 +112,7 @@ export class TaxpayersController {
   @ApiResponse({ status: 200, description: "Profil et statut de compte associé, le cas échéant." })
   @ApiResponse({ status: 404, description: "Dossier absent ou hors Haute Matsiatra." })
   @Roles(AccountRole.ADMIN)
-  obtenirUne(@Param("id", new ParseUUIDPipe()) id: string) {
-    return this.contribuables.obtenirUne(id);
+  getOne(@Param("id", new ParseUUIDPipe()) id: string) {
+    return this.taxpayers.getOne(id);
   }
 }

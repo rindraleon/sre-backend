@@ -7,95 +7,100 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Not, Repository } from "typeorm";
 import { TaxTypeEntity } from "../database/entities/tax-type.entity";
 import { TaxpayerType } from "../database/enums";
+import { toTaxTypeView } from "../common/views/entity-views";
 import { CreateTaxTypeDto } from "./dto/create-tax-type.dto";
 
 @Injectable()
 export class TaxTypesService {
   constructor(
     @InjectRepository(TaxTypeEntity)
-    private readonly typesImpots: Repository<TaxTypeEntity>,
+    private readonly taxTypes: Repository<TaxTypeEntity>,
   ) {}
 
-  listerActifs() {
-    return this.typesImpots.find({
-      where: { actif: true },
-      order: { nom: "ASC" },
+  async listActive() {
+    const taxTypes = await this.taxTypes.find({
+      where: { isActive: true },
+      order: { name: "ASC" },
     });
+    return taxTypes.map((taxType) => toTaxTypeView(taxType));
   }
 
-  listerTous() {
-    return this.typesImpots.find({ order: { creeLe: "DESC" } });
+  async listAll() {
+    const taxTypes = await this.taxTypes.find({
+      order: { createdAt: "DESC" },
+    });
+    return taxTypes.map((taxType) => toTaxTypeView(taxType));
   }
 
-  async creer(donnees: CreateTaxTypeDto) {
-    const code = donnees.code.trim().toUpperCase();
-    if (await this.typesImpots.exist({ where: { code } })) {
+  async create(data: CreateTaxTypeDto) {
+    const code = data.code.trim().toUpperCase();
+    if (await this.taxTypes.exist({ where: { code } })) {
       throw new ConflictException("Ce code de type d'impôt existe déjà.");
     }
-    const typeImpot = this.typesImpots.create({
+    const taxType = this.taxTypes.create({
       code,
-      nom: donnees.nom.trim(),
-      description: donnees.description.trim(),
-      categorie: donnees.categorie.trim(),
-      contribuablesConcernes: donnees.contribuablesConcernes,
-      periodicite: donnees.periodicite,
-      regleEcheance: donnees.regleEcheance.trim(),
-      modeMontant: donnees.modeMontant,
-      montantReference:
-        donnees.montantReference === undefined
+      name: data.nom.trim(),
+      description: data.description.trim(),
+      category: data.categorie.trim(),
+      applicableTaxpayers: data.contribuablesConcernes,
+      periodicity: data.periodicite,
+      dueDateRule: data.regleEcheance.trim(),
+      amountMode: data.modeMontant,
+      referenceAmount:
+        data.montantReference === undefined
           ? null
-          : String(donnees.montantReference),
-      champsComplementaires: donnees.champsComplementaires ?? [],
-      actif: donnees.actif ?? true,
+          : String(data.montantReference),
+      additionalFields: data.champsComplementaires ?? [],
+      isActive: data.actif ?? true,
     });
-    return this.typesImpots.save(typeImpot);
+    return toTaxTypeView(await this.taxTypes.save(taxType));
   }
 
-  async modifier(id: string, donnees: CreateTaxTypeDto) {
-    const typeImpot = await this.typesImpots.findOneBy({ id });
-    if (!typeImpot) throw new NotFoundException("Type d'impôt introuvable.");
-    const code = donnees.code.trim().toUpperCase();
-    if (await this.typesImpots.exist({ where: { code, id: Not(id) } })) {
+  async update(id: string, data: CreateTaxTypeDto) {
+    const taxType = await this.taxTypes.findOneBy({ id });
+    if (!taxType) throw new NotFoundException("Type d'impôt introuvable.");
+    const code = data.code.trim().toUpperCase();
+    if (await this.taxTypes.exist({ where: { code, id: Not(id) } })) {
       throw new ConflictException("Ce code de type d'impôt existe déjà.");
     }
-    Object.assign(typeImpot, {
+    Object.assign(taxType, {
       code,
-      nom: donnees.nom.trim(),
-      description: donnees.description.trim(),
-      categorie: donnees.categorie.trim(),
-      contribuablesConcernes: donnees.contribuablesConcernes,
-      periodicite: donnees.periodicite,
-      regleEcheance: donnees.regleEcheance.trim(),
-      modeMontant: donnees.modeMontant,
-      montantReference:
-        donnees.montantReference === undefined
+      name: data.nom.trim(),
+      description: data.description.trim(),
+      category: data.categorie.trim(),
+      applicableTaxpayers: data.contribuablesConcernes,
+      periodicity: data.periodicite,
+      dueDateRule: data.regleEcheance.trim(),
+      amountMode: data.modeMontant,
+      referenceAmount:
+        data.montantReference === undefined
           ? null
-          : String(donnees.montantReference),
-      champsComplementaires: donnees.champsComplementaires ?? [],
-      actif: donnees.actif ?? typeImpot.actif,
+          : String(data.montantReference),
+      additionalFields: data.champsComplementaires ?? [],
+      isActive: data.actif ?? taxType.isActive,
     });
-    return this.typesImpots.save(typeImpot);
+    return toTaxTypeView(await this.taxTypes.save(taxType));
   }
 
-  async definirActivite(id: string, actif: boolean) {
-    const typeImpot = await this.typesImpots.findOneBy({ id });
-    if (!typeImpot) throw new NotFoundException("Type d'impôt introuvable.");
-    typeImpot.actif = actif;
-    return this.typesImpots.save(typeImpot);
+  async setActive(id: string, isActive: boolean) {
+    const taxType = await this.taxTypes.findOneBy({ id });
+    if (!taxType) throw new NotFoundException("Type d'impôt introuvable.");
+    taxType.isActive = isActive;
+    return toTaxTypeView(await this.taxTypes.save(taxType));
   }
 
-  async correspondAuContribuable(
+  async matchesTaxpayer(
     idType: string,
-    typeContribuable: TaxpayerType,
+    taxpayerType: TaxpayerType,
   ) {
-    const typeImpot = await this.typesImpots.findOneBy({
+    const taxType = await this.taxTypes.findOneBy({
       id: idType,
-      actif: true,
+      isActive: true,
     });
     return Boolean(
-      typeImpot &&
-      (typeImpot.contribuablesConcernes === "TOUS" ||
-        typeImpot.contribuablesConcernes === typeContribuable),
+      taxType &&
+      (taxType.applicableTaxpayers === "TOUS" ||
+        taxType.applicableTaxpayers === taxpayerType),
     );
   }
 }

@@ -26,23 +26,23 @@ export class DocumentsController {
   @ApiOperation({ summary: "Lister les documents du contribuable authentifié." })
   @ApiResponse({ status: 200, description: "Accusés et reçus internes accessibles au compte." })
   @Roles(AccountRole.CLIENT)
-  listerMesDocuments(@CurrentUser() utilisateur: AuthenticatedUser) {
-    return this.documents.listerMesDocuments(utilisateur.contribuableId ?? "");
+  listMyDocuments(@CurrentUser() user: AuthenticatedUser) {
+    return this.documents.listMyDocuments(user.taxpayerId ?? "");
   }
 
   @Get(":id/pdf")
   @ApiOperation({ summary: "Télécharger le PDF d'un document autorisé." })
   @ApiResponse({ status: 200, description: "Fichier PDF en téléchargement." })
   @ApiResponse({ status: 404, description: "Document absent, annulé ou hors propriété." })
-  async telechargerPdf(
+  async downloadPdf(
     @Param("id", new ParseUUIDPipe()) id: string,
-    @CurrentUser() utilisateur: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    const fichier = await this.documents.obtenirPdf(id, utilisateur);
-    return new StreamableFile(fichier.contenu, {
+    const file = await this.documents.getPdf(id, user);
+    return new StreamableFile(file.content, {
       type: "application/pdf",
-      disposition: `attachment; filename="${fichier.numero}.pdf"`,
-      length: fichier.contenu.length,
+      disposition: `attachment; filename="${file.number}.pdf"`,
+      length: file.content.length,
     });
   }
 
@@ -50,10 +50,10 @@ export class DocumentsController {
   @ApiOperation({ summary: "Consulter les métadonnées d'un document autorisé." })
   @ApiResponse({ status: 200, description: "Métadonnées du document." })
   @ApiResponse({ status: 404, description: "Document introuvable ou hors propriété." })
-  obtenirUnDocument(
+  getOneDocument(
     @Param("id", new ParseUUIDPipe()) id: string,
-    @CurrentUser() utilisateur: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.documents.obtenirDocument(id, utilisateur);
+    return this.documents.getDocument(id, user);
   }
 }

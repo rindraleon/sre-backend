@@ -22,7 +22,7 @@ import {
   buildEmailHtml,
 } from "../notifications/mail.service";
 import { ChangePasswordDto } from "./dto/change-password.dto";
-import { ConfigurationInitialeDto } from "./dto/configuration-initiale.dto";
+import { InitialSetupDto } from "./dto/initial-setup.dto";
 import { ActivationConfirmationDto } from "./dto/activation-confirmation.dto";
 import { LoginDto } from "./dto/login.dto";
 import { RegistrationDto } from "./dto/registration.dto";
@@ -31,17 +31,17 @@ import {
 } from "../notifications/activation.service";
 import { ActivationTokenType } from "../database/enums";
 
-/** Messages explicites distincts (nouvelle politique d'authentification). */
-const MESSAGE_COMPTE_INTROUVABLE =
+/** Distinct explicit messages (new authentication policy). */
+const MESSAGE_ACCOUNT_NOT_FOUND =
   "Aucun compte n'est associé à cette adresse e-mail.";
-const MESSAGE_COMPTE_INACTIF =
+const MESSAGE_ACCOUNT_INACTIVE =
   "Ce compte n'est pas activé ou a été désactivé. Contactez l'administration.";
-const MESSAGE_MOT_DE_PASSE_INVALIDE =
+const MESSAGE_PASSWORD_INVALID =
   "Identifiants invalides : mot de passe incorrect.";
 
-const DUREE_VALIDITE_CODE_VERIFICATION_MS = 24 * 60 * 60 * 1000;
+const VERIFICATION_CODE_VALIDITY_MS = 24 * 60 * 60 * 1000;
 
-/** Empreinte SHA-256 du code de vérification (jamais stockée en clair). */
+/** SHA-256 fingerprint of the verification code (never stored in plain text). */
 function empreinteCode(code: string): string {
   return createHash("sha256").update(code).digest("hex");
 }
@@ -50,315 +50,315 @@ function empreinteCode(code: string): string {
 export class AuthService {
   constructor(
     @InjectRepository(UserEntity)
-    private readonly utilisateurs: Repository<UserEntity>,
+    private readonly users: Repository<UserEntity>,
     @InjectRepository(LoginAttemptEntity)
-    private readonly tentativesConnexion: Repository<LoginAttemptEntity>,
-    private readonly sourceDeDonnees: DataSource,
-    private readonly jetons: JwtService,
+    private readonly loginAttempts: Repository<LoginAttemptEntity>,
+    private readonly dataSource: DataSource,
+    private readonly jwtService: JwtService,
     private readonly configuration: ConfigService,
     private readonly activation: ActivationService,
-    @Inject(MAIL_SERVICE) private readonly courriels: MailSender,
+    @Inject(MAIL_SERVICE) private readonly emails: MailSender,
   ) {}
 
-  async obtenirEtatInscription() {
+  async getRegistrationState() {
     return {
-      administrateurInitialise: await this.utilisateurs.exist({
+      administrateurInitialise: await this.users.exist({
         where: { role: AccountRole.ADMIN },
       }),
     };
   }
 
-  async inscrire(donnees: RegistrationDto) {
-    const courriel = donnees.courriel.trim().toLowerCase();
-    const resultat = await this.sourceDeDonnees.transaction(
-      async (gestionnaire) => {
-        // Le verrou transactionnel empêche deux inscriptions simultanées d'obtenir le rôle administrateur initial.
-        await gestionnaire.query("SELECT pg_advisory_xact_lock($1)", [
+  async register(data: RegistrationDto) {
+    const email = data.courriel.trim().toLowerCase();
+    const result = await this.dataSource.transaction(
+      async (manager) => {
+        // The transactional lock prevents two simultaneous registrations from obtaining the initial administrator role.
+        await manager.query("SELECT pg_advisory_xact_lock($1)", [
           2026101201,
         ]);
-        const depotUtilisateurs = gestionnaire.getRepository(UserEntity);
-        const nombreUtilisateurs = await depotUtilisateurs.count();
+        const usersRepository = manager.getRepository(UserEntity);
+        const userCount = await usersRepository.count();
         const role =
-          nombreUtilisateurs === 0 ? AccountRole.ADMIN : AccountRole.CLIENT;
+          userCount === 0 ? AccountRole.ADMIN : AccountRole.CLIENT;
 
-        if (await depotUtilisateurs.exist({ where: { courriel } })) {
+        if (await usersRepository.exist({ where: { email } })) {
           throw new ConflictException(
             "Cette adresse courriel est déjà utilisée.",
           );
         }
-        if (role === AccountRole.CLIENT && !donnees.profil) {
+        if (role === AccountRole.CLIENT && !data.profil) {
           throw new BadRequestException(
             "Un profil contribuable est requis pour créer un compte client.",
           );
         }
         if (
-          donnees.profil &&
-          donnees.profil.courriel.trim().toLowerCase() !== courriel
+          data.profil &&
+          data.profil.courriel.trim().toLowerCase() !== email
         ) {
           throw new BadRequestException(
             "L'adresse courriel du profil doit correspondre à celle du compte.",
           );
         }
-        if (role === AccountRole.CLIENT && donnees.profil) {
-          const depotContribuables = gestionnaire.getRepository(TaxpayerEntity);
-          const nif = donnees.profil.nif?.trim().toUpperCase();
-          const stat = donnees.profil.stat?.trim().toUpperCase();
-          if (nif && (await depotContribuables.exist({ where: { nif } }))) {
+        if (role === AccountRole.CLIENT && data.profil) {
+          const taxpayersRepository = manager.getRepository(TaxpayerEntity);
+          const nif = data.profil.nif?.trim().toUpperCase();
+          const stat = data.profil.stat?.trim().toUpperCase();
+          if (nif && (await taxpayersRepository.exist({ where: { nif } }))) {
             throw new ConflictException("Ce NIF est déjà associé à un profil.");
           }
-          if (stat && (await depotContribuables.exist({ where: { stat } }))) {
+          if (stat && (await taxpayersRepository.exist({ where: { stat } }))) {
             throw new ConflictException(
               "Ce STAT est déjà associé à un profil.",
             );
           }
         }
 
-        const nombreTours = Number(
+        const saltRounds = Number(
           this.configuration.get<string>("BCRYPT_ROUNDS", "12"),
         );
-        const nouvelUtilisateur = depotUtilisateurs.create({
-          nom: donnees.nom.trim(),
-          courriel,
-          motDePasseHash: await bcrypt.hash(donnees.motDePasse, nombreTours),
+        const newUser = usersRepository.create({
+          name: data.nom.trim(),
+          email,
+          passwordHash: await bcrypt.hash(data.motDePasse, saltRounds),
           role,
-          statut: AccountStatus.ACTIF,
-          changementMotDePasseRequis: false,
-          derniereConnexion: new Date(),
+          status: AccountStatus.ACTIVE,
+          mustChangePassword: false,
+          lastLoginAt: new Date(),
         });
-        await depotUtilisateurs.save(nouvelUtilisateur);
+        await usersRepository.save(newUser);
 
-        let contribuable: TaxpayerEntity | null = null;
-        if (role === AccountRole.CLIENT && donnees.profil) {
-          const depotContribuables = gestionnaire.getRepository(TaxpayerEntity);
-          const profil = donnees.profil;
-          contribuable = depotContribuables.create({
-            utilisateur: nouvelUtilisateur,
-            type: profil.type,
-            nom: profil.nom.trim(),
-            prenom: profil.prenom?.trim() || null,
-            raisonSociale: profil.raisonSociale?.trim() || null,
-            nomCommercial: profil.nomCommercial?.trim() || null,
-            nif: profil.nif?.trim().toUpperCase() || null,
-            stat: profil.stat?.trim().toUpperCase() || null,
-            adresse: profil.adresse.trim(),
-            region: profil.region.trim(),
-            ville: profil.ville.trim(),
-            courriel,
-            telephone: profil.telephone.trim(),
-            representantLegal: profil.representantLegal?.trim() || null,
-            nomContact: profil.nomContact?.trim() || null,
-            prenomContact: profil.prenomContact?.trim() || null,
-            fonctionContact: profil.fonctionContact?.trim() || null,
-            dateCreationCompte: new Date(),
+        let taxpayer: TaxpayerEntity | null = null;
+        if (role === AccountRole.CLIENT && data.profil) {
+          const taxpayersRepository = manager.getRepository(TaxpayerEntity);
+          const profile = data.profil;
+          taxpayer = taxpayersRepository.create({
+            user: newUser,
+            type: profile.type,
+            lastName: profile.nom.trim(),
+            firstName: profile.prenom?.trim() || null,
+            legalName: profile.raisonSociale?.trim() || null,
+            tradeName: profile.nomCommercial?.trim() || null,
+            nif: profile.nif?.trim().toUpperCase() || null,
+            stat: profile.stat?.trim().toUpperCase() || null,
+            address: profile.adresse.trim(),
+            region: profile.region.trim(),
+            city: profile.ville.trim(),
+            email,
+            phone: profile.telephone.trim(),
+            legalRepresentative: profile.representantLegal?.trim() || null,
+            contactLastName: profile.nomContact?.trim() || null,
+            contactFirstName: profile.prenomContact?.trim() || null,
+            contactRole: profile.fonctionContact?.trim() || null,
+            accountCreatedAt: new Date(),
           });
-          await depotContribuables.save(contribuable);
+          await taxpayersRepository.save(taxpayer);
         }
-        return { utilisateur: nouvelUtilisateur, contribuable };
+        return { utilisateur: newUser, contribuable: taxpayer };
       },
     );
 
-    return this.reponseAvecJeton(
-      resultat.utilisateur,
-      resultat.contribuable?.id,
+    return this.buildTokenResponse(
+      result.utilisateur,
+      result.contribuable?.id,
     );
   }
 
   /**
-   * Authentification : e-mail + mot de passe uniquement.
-   * - première connexion : le mot de passe provisoire est celui transmis lors
-   *   de la création du compte (le numéro STAT sert de mot de passe initial et
-   *   n'est plus une pièce d'identité séparée) ;
-   * - connexions suivantes : le mot de passe personnel défini par l'utilisateur ;
-   * - chaque tentative est journalisée (sans secret) et limitée dans le temps.
+   * Authentication: e-mail + password only.
+   * - first sign-in: the provisional password is the one provided when
+   *   the account was created (the STAT number serves as initial password and
+   *   is no longer a separate identity document);
+   * - subsequent sign-ins: the personal password set by the user;
+   * - every attempt is logged (without secrets) and time-limited.
    */
-  async connecter(donnees: LoginDto, adresseIp?: string | null) {
-    const courriel = donnees.courriel.trim().toLowerCase();
+  async logIn(data: LoginDto, ipAddress?: string | null) {
+    const email = data.courriel.trim().toLowerCase();
 
-    const utilisateur = await this.utilisateurs
-      .createQueryBuilder("utilisateur")
-      .addSelect("utilisateur.motDePasseHash")
-      .leftJoinAndSelect("utilisateur.contribuable", "contribuable")
-      .where("LOWER(utilisateur.courriel) = :courriel", { courriel })
+    const user = await this.users
+      .createQueryBuilder("user")
+      .addSelect("user.passwordHash")
+      .leftJoinAndSelect("user.taxpayer", "taxpayer")
+      .where("LOWER(user.email) = :email", { email: email })
       .getOne();
 
-    let motif = "compte_introuvable";
+    let reason = "compte_introuvable";
     try {
-      if (!utilisateur) {
-        throw new UnauthorizedException(MESSAGE_COMPTE_INTROUVABLE);
+      if (!user) {
+        throw new UnauthorizedException(MESSAGE_ACCOUNT_NOT_FOUND);
       }
-      if (utilisateur.statut !== AccountStatus.ACTIF) {
-        motif = "compte_inactif";
-        throw new UnauthorizedException(MESSAGE_COMPTE_INACTIF);
+      if (user.status !== AccountStatus.ACTIVE) {
+        reason = "compte_inactif";
+        throw new UnauthorizedException(MESSAGE_ACCOUNT_INACTIVE);
       }
       if (
-        !(await bcrypt.compare(donnees.motDePasse, utilisateur.motDePasseHash))
+        !(await bcrypt.compare(data.motDePasse, user.passwordHash))
       ) {
-        motif = "mot_de_passe";
-        throw new UnauthorizedException(MESSAGE_MOT_DE_PASSE_INVALIDE);
+        reason = "mot_de_passe";
+        throw new UnauthorizedException(MESSAGE_PASSWORD_INVALID);
       }
 
-      motif = "ok";
-      utilisateur.derniereConnexion = new Date();
-      await this.utilisateurs.save(utilisateur);
-      await this.journaliserTentative(courriel, true, "ok", adresseIp);
-      return this.reponseAvecJeton(
-        utilisateur,
-        utilisateur.contribuable?.id,
+      reason = "ok";
+      user.lastLoginAt = new Date();
+      await this.users.save(user);
+      await this.logAttempt(email, true, "ok", ipAddress);
+      return this.buildTokenResponse(
+        user,
+        user.taxpayer?.id,
       );
     } catch (cause) {
-      await this.journaliserTentative(courriel, false, motif, adresseIp);
+      await this.logAttempt(email, false, reason, ipAddress);
       throw cause;
     }
   }
 
-  private async journaliserTentative(
-    courriel: string,
-    succes: boolean,
-    motif: string,
-    adresseIp?: string | null,
+  private async logAttempt(
+    email: string,
+    success: boolean,
+    reason: string,
+    ipAddress?: string | null,
   ) {
     try {
-      await this.tentativesConnexion.insert({
-        courriel: courriel.slice(0, 254),
-        succes,
-        motif: motif.slice(0, 120),
-        adresseIp: adresseIp?.slice(0, 64) ?? null,
+      await this.loginAttempts.insert({
+        email: email.slice(0, 254),
+        success,
+        reason: reason.slice(0, 120),
+        ipAddress: ipAddress?.slice(0, 64) ?? null,
       });
     } catch {
-      // Le journal ne doit jamais faire échouer l'authentification.
+      // The log must never make authentication fail.
     }
   }
 
   /**
-   * Demande de vérification d'adresse e-mail : code à usage unique valable
-   * 24 h, stocké sous forme d'empreinte. La réponse est identique que le
-   * compte existe ou non (aucune énumération de comptes).
+   * E-mail address verification request: single-use code valid for
+   * 24 h, stored as a fingerprint. The response is identical whether
+   * the account exists or not (no account enumeration).
    */
-  async demanderVerificationCourriel(courriel: string) {
-    const adresse = courriel.trim().toLowerCase();
-    const utilisateur = await this.utilisateurs.findOne({
-      where: { courriel: adresse },
-      select: ["id", "nom", "courriel", "courrielVerifie"],
+  async requestEmailVerification(email: string) {
+    const address = email.trim().toLowerCase();
+    const user = await this.users.findOne({
+      where: { email: address },
+      select: ["id", "name", "email", "isEmailVerified"],
     });
-    const reponse = {
+    const response = {
       message:
         "Si un compte correspond à cette adresse et qu'un transport de courriel est configuré, un code de vérification a été envoyé.",
     };
-    if (!utilisateur || utilisateur.courrielVerifie) return reponse;
+    if (!user || user.isEmailVerified) return response;
 
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
-    utilisateur.verificationCourrielCodeHash = empreinteCode(code);
-    utilisateur.verificationCourrielExpireLe = new Date(
-      Date.now() + DUREE_VALIDITE_CODE_VERIFICATION_MS,
+    user.emailVerificationCodeHash = empreinteCode(code);
+    user.emailVerificationExpiresAt = new Date(
+      Date.now() + VERIFICATION_CODE_VALIDITY_MS,
     );
-    await this.utilisateurs.save(utilisateur);
+    await this.users.save(user);
 
     try {
       const appUrl = this.configuration.get<string>("APP_URL", "");
-      await this.courriels.envoyer({
-        destinataire: utilisateur.courriel,
-        nomDestinataire: utilisateur.nom,
-        sujet: "Portail SRE — code de vérification de votre adresse e-mail",
-        texte: `Bonjour ${utilisateur.nom},\n\nVotre code de vérification est : ${code}\nIl expire dans 24 heures.\n\nSi vous n'êtes pas à l'origine de cette demande, ignorez ce message.\n\nMessage automatique du portail SRE. Ne répondez pas à cet e-mail.`,
+      await this.emails.send({
+        recipient: user.email,
+        recipientName: user.name,
+        subject: "Portail SRE — code de vérification de votre adresse e-mail",
+        text: `Bonjour ${user.name},\n\nVotre code de vérification est : ${code}\nIl expire dans 24 heures.\n\nSi vous n'êtes pas à l'origine de cette demande, ignorez ce message.\n\nMessage automatique du portail SRE. Ne répondez pas à cet e-mail.`,
         html: buildEmailHtml({
-          nomDestinataire: utilisateur.nom,
-          titre: "Vérification de votre adresse e-mail",
+          recipientName: user.name,
+          title: "Vérification de votre adresse e-mail",
           message: `Votre code de vérification est : ${code}. Il expire dans 24 heures. Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.`,
-          lienApplication: appUrl || "#",
+          appLink: appUrl || "#",
         }),
       });
     } catch {
-      // Sans transport configuré, le code reste valable côté serveur mais
-      // aucun envoi n'est annoncé comme réussi.
+      // Without a configured transport, the code stays valid server-side but
+      // no send is announced as successful.
     }
-    return reponse;
+    return response;
   }
 
-  /** Valide le code à usage unique et marque l'adresse comme vérifiée. */
-  async verifierCourriel(courriel: string, code: string) {
-    const adresse = courriel.trim().toLowerCase();
-    const utilisateur = await this.utilisateurs
-      .createQueryBuilder("utilisateur")
-      .addSelect("utilisateur.verificationCourrielCodeHash")
-      .addSelect("utilisateur.verificationCourrielExpireLe")
-      .where("LOWER(utilisateur.courriel) = :courriel", { courriel: adresse })
+  /** Validates the single-use code and marks the address as verified. */
+  async verifyEmail(email: string, code: string) {
+    const address = email.trim().toLowerCase();
+    const user = await this.users
+      .createQueryBuilder("user")
+      .addSelect("user.emailVerificationCodeHash")
+      .addSelect("user.emailVerificationExpiresAt")
+      .where("LOWER(user.email) = :email", { email: address })
       .getOne();
     if (
-      !utilisateur ||
-      !utilisateur.verificationCourrielCodeHash ||
-      !utilisateur.verificationCourrielExpireLe ||
-      utilisateur.verificationCourrielExpireLe.getTime() < Date.now() ||
-      utilisateur.verificationCourrielCodeHash !== empreinteCode(code.trim())
+      !user ||
+      !user.emailVerificationCodeHash ||
+      !user.emailVerificationExpiresAt ||
+      user.emailVerificationExpiresAt.getTime() < Date.now() ||
+      user.emailVerificationCodeHash !== empreinteCode(code.trim())
     ) {
       throw new BadRequestException(
         "Code de vérification invalide ou expiré. Demandez un nouveau code.",
       );
     }
-    utilisateur.courrielVerifie = true;
-    utilisateur.verificationCourrielCodeHash = null;
-    utilisateur.verificationCourrielExpireLe = null;
-    await this.utilisateurs.save(utilisateur);
+    user.isEmailVerified = true;
+    user.emailVerificationCodeHash = null;
+    user.emailVerificationExpiresAt = null;
+    await this.users.save(user);
     return { message: "Adresse e-mail vérifiée.", courrielVerifie: true };
   }
 
-  async obtenirMonCompte(idUtilisateur: string) {
-    const utilisateur = await this.utilisateurs.findOne({
-      where: { id: idUtilisateur },
-      relations: { contribuable: true },
+  async getMyAccount(userId: string) {
+    const user = await this.users.findOne({
+      where: { id: userId },
+      relations: { taxpayer: true },
     });
-    if (!utilisateur || utilisateur.statut !== AccountStatus.ACTIF) {
+    if (!user || user.status !== AccountStatus.ACTIVE) {
       throw new UnauthorizedException("Ce compte n'est plus actif.");
     }
-    return this.vuePublique(utilisateur, utilisateur.contribuable?.id);
+    return this.toPublicView(user, user.taxpayer?.id);
   }
 
-  async changerMotDePasse(idUtilisateur: string, donnees: ChangePasswordDto) {
-    const utilisateur = await this.utilisateurs
-      .createQueryBuilder("utilisateur")
-      .addSelect("utilisateur.motDePasseHash")
-      .where("utilisateur.id = :idUtilisateur", { idUtilisateur })
+  async changePassword(userId: string, data: ChangePasswordDto) {
+    const user = await this.users
+      .createQueryBuilder("user")
+      .addSelect("user.passwordHash")
+      .where("user.id = :userId", { userId: userId })
       .getOne();
-    if (!utilisateur) throw new UnauthorizedException("Compte introuvable.");
+    if (!user) throw new UnauthorizedException("Compte introuvable.");
     if (
       !(await bcrypt.compare(
-        donnees.motDePasseActuel,
-        utilisateur.motDePasseHash,
+        data.motDePasseActuel,
+        user.passwordHash,
       ))
     ) {
       throw new BadRequestException("Le mot de passe actuel est incorrect.");
     }
 
-    utilisateur.motDePasseHash = await bcrypt.hash(
-      donnees.nouveauMotDePasse,
+    user.passwordHash = await bcrypt.hash(
+      data.nouveauMotDePasse,
       Number(this.configuration.get<string>("BCRYPT_ROUNDS", "12")),
     );
-    utilisateur.changementMotDePasseRequis = false;
-    await this.utilisateurs.save(utilisateur);
+    user.mustChangePassword = false;
+    await this.users.save(user);
     return { message: "Le mot de passe a été modifié." };
   }
 
   /**
-   * Configuration initiale (première connexion) : remplace le mot de passe
-   * provisoire (numéro STAT transmis à la création) par un mot de passe
-   * personnel, valide le profil et débloque l'espace — en une seule
-   * transaction. Le mot de passe provisoire est définitivement invalidé.
+   * Initial setup (first sign-in): replaces the provisional
+   * password (STAT number provided at creation) with a personal
+   * password, validates the profile and unlocks the workspace — in a single
+   * transaction. The provisional password is permanently invalidated.
    */
-  async configurerPremiereConnexion(
-    idUtilisateur: string,
-    donnees: ConfigurationInitialeDto,
+  async completeInitialSetup(
+    userId: string,
+    data: InitialSetupDto,
   ) {
-    const utilisateur = await this.utilisateurs
-      .createQueryBuilder("utilisateur")
-      .addSelect("utilisateur.motDePasseHash")
-      .leftJoinAndSelect("utilisateur.contribuable", "contribuable")
-      .where("utilisateur.id = :idUtilisateur", { idUtilisateur })
+    const user = await this.users
+      .createQueryBuilder("user")
+      .addSelect("user.passwordHash")
+      .leftJoinAndSelect("user.taxpayer", "taxpayer")
+      .where("user.id = :userId", { userId: userId })
       .getOne();
-    if (!utilisateur || utilisateur.statut !== AccountStatus.ACTIF) {
+    if (!user || user.status !== AccountStatus.ACTIVE) {
       throw new UnauthorizedException("Ce compte n'est pas actif.");
     }
     if (
-      !utilisateur.changementMotDePasseRequis &&
-      utilisateur.profilComplete
+      !user.mustChangePassword &&
+      user.isProfileComplete
     ) {
       throw new BadRequestException(
         "La configuration initiale de ce compte est déjà terminée. Utilisez le changement de mot de passe.",
@@ -366,35 +366,35 @@ export class AuthService {
     }
     if (
       !(await bcrypt.compare(
-        donnees.motDePasseActuel,
-        utilisateur.motDePasseHash,
+        data.motDePasseActuel,
+        user.passwordHash,
       ))
     ) {
       throw new BadRequestException("Le mot de passe actuel est incorrect.");
     }
 
-    await this.sourceDeDonnees.transaction(async (gestionnaire) => {
-      const depotUtilisateurs = gestionnaire.getRepository(UserEntity);
-      utilisateur.motDePasseHash = await bcrypt.hash(
-        donnees.nouveauMotDePasse,
+    await this.dataSource.transaction(async (manager) => {
+      const usersRepository = manager.getRepository(UserEntity);
+      user.passwordHash = await bcrypt.hash(
+        data.nouveauMotDePasse,
         Number(this.configuration.get<string>("BCRYPT_ROUNDS", "12")),
       );
-      utilisateur.changementMotDePasseRequis = false;
-      utilisateur.profilComplete = true;
-      await depotUtilisateurs.save(utilisateur);
+      user.mustChangePassword = false;
+      user.isProfileComplete = true;
+      await usersRepository.save(user);
 
-      if (utilisateur.contribuable && donnees.profil) {
-        const depotContribuables = gestionnaire.getRepository(TaxpayerEntity);
-        const profil = utilisateur.contribuable;
-        if (donnees.profil.adresse !== undefined)
-          profil.adresse = donnees.profil.adresse.trim();
-        if (donnees.profil.ville !== undefined)
-          profil.ville = donnees.profil.ville.trim();
-        if (donnees.profil.telephone !== undefined)
-          profil.telephone = donnees.profil.telephone.trim();
-        if (donnees.profil.nomCommercial !== undefined)
-          profil.nomCommercial = donnees.profil.nomCommercial.trim() || null;
-        await depotContribuables.save(profil);
+      if (user.taxpayer && data.profil) {
+        const taxpayersRepository = manager.getRepository(TaxpayerEntity);
+        const profile = user.taxpayer;
+        if (data.profil.adresse !== undefined)
+          profile.address = data.profil.adresse.trim();
+        if (data.profil.ville !== undefined)
+          profile.city = data.profil.ville.trim();
+        if (data.profil.telephone !== undefined)
+          profile.phone = data.profil.telephone.trim();
+        if (data.profil.nomCommercial !== undefined)
+          profile.tradeName = data.profil.nomCommercial.trim() || null;
+        await taxpayersRepository.save(profile);
       }
     });
 
@@ -406,68 +406,68 @@ export class AuthService {
     };
   }
 
-  /** Vue publique d'un lien d'activation (avant confirmation). */
-  async consulterActivation(jeton: string) {
-    const demande = await this.activation.validerJeton(
-      jeton,
+  /** Public view of an activation link (before confirmation). */
+  async getActivationStatus(token: string) {
+    const request = await this.activation.validateToken(
+      token,
       ActivationTokenType.ACTIVATION,
     );
-    const utilisateur = demande.utilisateur;
-    const courriel = demande.destinataire;
+    const user = request.user;
+    const email = request.recipient;
     return {
       valide: true,
-      courrielMasque: this.masquerCourriel(courriel),
+      courrielMasque: this.maskEmail(email),
       nom:
-        utilisateur?.contribuable?.raisonSociale ??
-        utilisateur?.contribuable?.nom ??
-        utilisateur?.nom ??
+        user?.taxpayer?.legalName ??
+        user?.taxpayer?.lastName ??
+        user?.name ??
         "",
-      expireLe: demande.expireLe,
+      expireLe: request.expiresAt,
     };
   }
 
   /**
-   * Confirmation d'un lien d'activation à usage unique : définit le mot de
-   * passe personnel, valide le profil et invalide définitivement le jeton et
-   * le mot de passe provisoire.
+   * Confirmation of a single-use activation link: sets the personal
+   * password, validates the profile and permanently invalidates the token and
+   * the provisional password.
    */
-  async confirmerActivation(jeton: string, donnees: ActivationConfirmationDto) {
-    return this.sourceDeDonnees.transaction(async (gestionnaire) => {
-      const demande = await this.activation.validerJeton(
-        jeton,
+  async confirmActivation(token: string, data: ActivationConfirmationDto) {
+    return this.dataSource.transaction(async (manager) => {
+      const request = await this.activation.validateToken(
+        token,
         ActivationTokenType.ACTIVATION,
         true,
       );
-      const depotUtilisateurs = gestionnaire.getRepository(UserEntity);
-      const utilisateur = await depotUtilisateurs
-        .createQueryBuilder("utilisateur")
-        .addSelect("utilisateur.motDePasseHash")
-        .leftJoinAndSelect("utilisateur.contribuable", "contribuable")
-        .where("utilisateur.id = :id", { id: demande.utilisateurId })
+      const usersRepository = manager.getRepository(UserEntity);
+      const user = await usersRepository
+        .createQueryBuilder("user")
+        .addSelect("user.passwordHash")
+        .leftJoinAndSelect("user.taxpayer", "taxpayer")
+        .where("user.id = :id", { id: request.userId })
         .getOne();
-      if (!utilisateur || utilisateur.statut !== AccountStatus.ACTIF) {
+      if (!user || user.status !== AccountStatus.ACTIVE) {
         throw new UnauthorizedException("Ce compte n'est pas actif.");
       }
-      utilisateur.motDePasseHash = await bcrypt.hash(
-        donnees.nouveauMotDePasse,
+      user.passwordHash = await bcrypt.hash(
+        data.nouveauMotDePasse,
         Number(this.configuration.get<string>("BCRYPT_ROUNDS", "12")),
       );
-      utilisateur.changementMotDePasseRequis = false;
-      utilisateur.profilComplete = true;
-      await depotUtilisateurs.save(utilisateur);
+      user.mustChangePassword = false;
+      user.isProfileComplete = true;
+      await usersRepository.save(user);
 
-      if (utilisateur.contribuable && donnees.profil) {
-        const depotContribuables = gestionnaire.getRepository(TaxpayerEntity);
-        const profil = utilisateur.contribuable;
-        if (donnees.profil.adresse !== undefined)
-          profil.adresse = donnees.profil.adresse.trim();
-        if (donnees.profil.ville !== undefined)
-          profil.ville = donnees.profil.ville.trim();
-        if (donnees.profil.telephone !== undefined)
-          profil.telephone = donnees.profil.telephone.trim();
-        if (donnees.profil.nomCommercial !== undefined)
-          profil.nomCommercial = donnees.profil.nomCommercial.trim() || null;
-        await depotContribuables.save(profil);
+      if (user.taxpayer && data.profil) {
+        const taxpayersRepository = manager.getRepository(TaxpayerEntity);
+        const profile = user.taxpayer;
+        if (data.profil.adresse !== undefined)
+          profile.address = data.profil.adresse.trim();
+        if (data.profil.ville !== undefined)
+          profile.city = data.profil.ville.trim();
+        if (data.profil.telephone !== undefined)
+          profile.phone = data.profil.telephone.trim();
+        if (data.profil.nomCommercial !== undefined)
+          profile.tradeName = data.profil.nomCommercial.trim() || null;
+        await taxpayersRepository.save(profile);
       }
       return {
         message:
@@ -477,90 +477,91 @@ export class AuthService {
   }
 
   /**
-   * Demande de réinitialisation du mot de passe : la réponse est toujours la
-   * même (aucune énumération de comptes) ; un lien à usage unique est envoyé
-   * si un compte actif correspond.
+   * Password reset request: the response is always the
+   * same (no account enumeration); a single-use link is sent
+   * if an active account matches.
    */
-  async demanderReinitialisation(courriel: string) {
-    const adresse = courriel.trim().toLowerCase();
-    const reponse = {
+  async requestPasswordReset(email: string) {
+    const address = email.trim().toLowerCase();
+    const response = {
       message:
         "Si un compte actif correspond à cette adresse, un lien de réinitialisation a été envoyé.",
     };
-    const utilisateur = await this.utilisateurs.findOne({
-      where: { courriel: adresse },
+    const user = await this.users.findOne({
+      where: { email: address },
     });
-    if (!utilisateur || utilisateur.statut !== AccountStatus.ACTIF) return reponse;
-    await this.activation.creerDemandeReinitialisation(utilisateur);
-    return reponse;
+    if (!user || user.status !== AccountStatus.ACTIVE) return response;
+    await this.activation.createPasswordResetRequest(user);
+    return response;
   }
 
-  /** Réinitialisation via le jeton à usage unique reçu par courriel. */
-  async reinitialiserMotDePasse(jeton: string, nouveauMotDePasse: string) {
-    const demande = await this.activation.validerJeton(
-      jeton,
-      ActivationTokenType.REINITIALISATION,
+  /** Reset through the single-use token received by e-mail. */
+  async resetPassword(token: string, newPassword: string) {
+    const request = await this.activation.validateToken(
+      token,
+      ActivationTokenType.PASSWORD_RESET,
       true,
     );
-    const utilisateur = await this.utilisateurs
-      .createQueryBuilder("utilisateur")
-      .addSelect("utilisateur.motDePasseHash")
-      .where("utilisateur.id = :id", { id: demande.utilisateurId })
+    const user = await this.users
+      .createQueryBuilder("user")
+      .addSelect("user.passwordHash")
+      .where("user.id = :id", { id: request.userId })
       .getOne();
-    if (!utilisateur) throw new UnauthorizedException("Compte introuvable.");
-    utilisateur.motDePasseHash = await bcrypt.hash(
-      nouveauMotDePasse,
+    if (!user) throw new UnauthorizedException("Compte introuvable.");
+    user.passwordHash = await bcrypt.hash(
+      newPassword,
       Number(this.configuration.get<string>("BCRYPT_ROUNDS", "12")),
     );
-    utilisateur.changementMotDePasseRequis = false;
-    await this.utilisateurs.save(utilisateur);
+    user.mustChangePassword = false;
+    await this.users.save(user);
     return {
       message:
         "Mot de passe réinitialisé. Connectez-vous avec votre nouveau mot de passe.",
     };
   }
 
-  private masquerCourriel(courriel: string): string {
-    const [avant, domaine] = courriel.split("@");
-    if (!domaine) return courriel;
-    const tete = avant.slice(0, 2);
-    return `${tete}${"*".repeat(Math.max(1, avant.length - 2))}@${domaine}`;
+  private maskEmail(email: string): string {
+    const [localPart, domain] = email.split("@");
+    if (!domain) return email;
+    const visiblePrefix = localPart.slice(0, 2);
+    return `${visiblePrefix}${"*".repeat(Math.max(1, localPart.length - 2))}@${domain}`;
   }
 
-  private async reponseAvecJeton(
-    utilisateur: UserEntity,
-    idContribuable?: string,
+  private async buildTokenResponse(
+    user: UserEntity,
+    taxpayerId?: string,
   ) {
-    const charge: AuthenticatedUser = {
-      id: utilisateur.id,
-      courriel: utilisateur.courriel,
-      nom: utilisateur.nom,
-      role: utilisateur.role,
-      ...(idContribuable ? { contribuableId: idContribuable } : {}),
-      changementMotDePasseRequis: utilisateur.changementMotDePasseRequis,
-      profilComplete: utilisateur.profilComplete,
+    // Token claim names (serialized format): kept as-is.
+    const payload = {
+      id: user.id,
+      courriel: user.email,
+      nom: user.name,
+      role: user.role,
+      ...(taxpayerId ? { contribuableId: taxpayerId } : {}),
+      changementMotDePasseRequis: user.mustChangePassword,
+      profilComplete: user.isProfileComplete,
     };
-    const accessToken = await this.jetons.signAsync(charge);
+    const accessToken = await this.jwtService.signAsync(payload);
     return {
       accessToken,
       tokenType: "Bearer",
-      utilisateur: this.vuePublique(utilisateur, idContribuable),
+      utilisateur: this.toPublicView(user, taxpayerId),
     };
   }
 
-  private vuePublique(utilisateur: UserEntity, idContribuable?: string) {
+  private toPublicView(user: UserEntity, taxpayerId?: string) {
     return {
-      id: utilisateur.id,
-      nom: utilisateur.nom,
-      courriel: utilisateur.courriel,
-      role: utilisateur.role,
-      statut: utilisateur.statut,
-      changementMotDePasseRequis: utilisateur.changementMotDePasseRequis,
-      profilComplete: utilisateur.profilComplete,
-      courrielVerifie: utilisateur.courrielVerifie,
-      creeLe: utilisateur.creeLe,
-      derniereConnexion: utilisateur.derniereConnexion,
-      ...(idContribuable ? { contribuableId: idContribuable } : {}),
+      id: user.id,
+      nom: user.name,
+      courriel: user.email,
+      role: user.role,
+      statut: user.status,
+      changementMotDePasseRequis: user.mustChangePassword,
+      profilComplete: user.isProfileComplete,
+      courrielVerifie: user.isEmailVerified,
+      creeLe: user.createdAt,
+      derniereConnexion: user.lastLoginAt,
+      ...(taxpayerId ? { contribuableId: taxpayerId } : {}),
     };
   }
 }

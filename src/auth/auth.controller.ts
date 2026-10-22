@@ -13,35 +13,35 @@ import {
 import { Throttle } from "@nestjs/throttler";
 import type { Request } from "express";
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
-import { ConfigurationLibre } from "../common/decorators/configuration-libre.decorator";
+import { SetupExempt } from "../common/decorators/setup-exempt.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
 import { AuthService } from "./auth.service";
 import { ActivationConfirmationDto } from "./dto/activation-confirmation.dto";
 import { ChangePasswordDto } from "./dto/change-password.dto";
-import { ConfigurationInitialeDto } from "./dto/configuration-initiale.dto";
+import { InitialSetupDto } from "./dto/initial-setup.dto";
 import { LoginDto } from "./dto/login.dto";
 import {
-  MotDePasseOublieDto,
-  ReinitialisationMotDePasseDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
 } from "./dto/password-reset.dto";
 import { RegistrationDto } from "./dto/registration.dto";
 import {
-  DemanderVerificationCourrielDto,
-  VerifierCourrielDto,
-} from "./dto/verification-courriel.dto";
+  RequestEmailVerificationDto,
+  VerifyEmailDto,
+} from "./dto/email-verification.dto";
 
 @ApiTags("Authentification")
 @Controller("auth")
 export class AuthController {
-  constructor(private readonly authentification: AuthService) {}
+  constructor(private readonly auth: AuthService) {}
 
   @Get("etat-inscription")
   @ApiOperation({ summary: "Consulter l'état d'initialisation du premier administrateur." })
   @ApiResponse({ status: 200, description: "Indique si un compte administrateur existe déjà." })
-  etatInscription() {
-    return this.authentification.obtenirEtatInscription();
+  registrationState() {
+    return this.auth.getRegistrationState();
   }
 
   @Post("inscription")
@@ -55,8 +55,8 @@ export class AuthController {
   @ApiResponse({ status: 409, description: "Courriel, NIF ou STAT déjà utilisé." })
   @Throttle({ global: { limit: 8, ttl: 60_000 } })
   @HttpCode(HttpStatus.CREATED)
-  inscrire(@Body() donnees: RegistrationDto) {
-    return this.authentification.inscrire(donnees);
+  register(@Body() data: RegistrationDto) {
+    return this.auth.register(data);
   }
 
   @Post("connexion")
@@ -73,15 +73,15 @@ export class AuthController {
   })
   @Throttle({ global: { limit: 8, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  connecter(@Body() donnees: LoginDto, @Req() requete: Request) {
-    return this.authentification.connecter(
-      donnees,
-      requete.ip ?? requete.socket?.remoteAddress ?? null,
+  logIn(@Body() data: LoginDto, @Req() request: Request) {
+    return this.auth.logIn(
+      data,
+      request.ip ?? request.socket?.remoteAddress ?? null,
     );
   }
 
   @Post("configuration-initiale")
-  @ConfigurationLibre()
+  @SetupExempt()
   @ApiBearerAuth()
   @ApiOperation({
     summary: "Configuration initiale : mot de passe provisoire → mot de passe personnel + profil.",
@@ -92,13 +92,13 @@ export class AuthController {
   @ApiResponse({ status: 400, description: "Mot de passe actuel incorrect ou configuration déjà terminée." })
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.CREATED)
-  configurerPremiereConnexion(
-    @CurrentUser() utilisateur: AuthenticatedUser,
-    @Body() donnees: ConfigurationInitialeDto,
+  completeInitialSetup(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() data: InitialSetupDto,
   ) {
-    return this.authentification.configurerPremiereConnexion(
-      utilisateur.id,
-      donnees,
+    return this.auth.completeInitialSetup(
+      user.id,
+      data,
     );
   }
 
@@ -111,8 +111,8 @@ export class AuthController {
   @ApiResponse({ status: 200, description: "Jeton valide (destinataire masqué, libellé de l'entité)." })
   @ApiResponse({ status: 404, description: "Lien invalide, déjà utilisé ou expiré." })
   @Throttle({ global: { limit: 12, ttl: 60_000 } })
-  consulterActivation(@Param("jeton") jeton: string) {
-    return this.authentification.consulterActivation(jeton);
+  getActivationStatus(@Param("jeton") token: string) {
+    return this.auth.getActivationStatus(token);
   }
 
   @Post("activation/confirmer")
@@ -125,8 +125,8 @@ export class AuthController {
   @ApiResponse({ status: 404, description: "Lien invalide, déjà utilisé ou expiré." })
   @Throttle({ global: { limit: 8, ttl: 60_000 } })
   @HttpCode(HttpStatus.CREATED)
-  confirmerActivation(@Body() donnees: ActivationConfirmationDto) {
-    return this.authentification.confirmerActivation(donnees.jeton, donnees);
+  confirmActivation(@Body() data: ActivationConfirmationDto) {
+    return this.auth.confirmActivation(data.jeton, data);
   }
 
   @Post("mot-de-passe-oublie")
@@ -138,8 +138,8 @@ export class AuthController {
   @ApiResponse({ status: 201, description: "Demande traitée (réponse générique)." })
   @Throttle({ global: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.CREATED)
-  demanderReinitialisation(@Body() donnees: MotDePasseOublieDto) {
-    return this.authentification.demanderReinitialisation(donnees.courriel);
+  requestPasswordReset(@Body() data: ForgotPasswordDto) {
+    return this.auth.requestPasswordReset(data.courriel);
   }
 
   @Post("reinitialisation-mot-de-passe")
@@ -148,10 +148,10 @@ export class AuthController {
   @ApiResponse({ status: 404, description: "Jeton invalide, déjà utilisé ou expiré." })
   @Throttle({ global: { limit: 8, ttl: 60_000 } })
   @HttpCode(HttpStatus.CREATED)
-  reinitialiserMotDePasse(@Body() donnees: ReinitialisationMotDePasseDto) {
-    return this.authentification.reinitialiserMotDePasse(
-      donnees.jeton,
-      donnees.nouveauMotDePasse,
+  resetPassword(@Body() data: ResetPasswordDto) {
+    return this.auth.resetPassword(
+      data.jeton,
+      data.nouveauMotDePasse,
     );
   }
 
@@ -164,8 +164,8 @@ export class AuthController {
   @ApiResponse({ status: 201, description: "Demande traitée (réponse générique)." })
   @Throttle({ global: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.CREATED)
-  demanderVerificationCourriel(@Body() donnees: DemanderVerificationCourrielDto) {
-    return this.authentification.demanderVerificationCourriel(donnees.courriel);
+  requestEmailVerification(@Body() data: RequestEmailVerificationDto) {
+    return this.auth.requestEmailVerification(data.courriel);
   }
 
   @Post("verification-courriel/confirmer")
@@ -174,33 +174,33 @@ export class AuthController {
   @ApiResponse({ status: 400, description: "Code invalide ou expiré." })
   @Throttle({ global: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.CREATED)
-  verifierCourriel(@Body() donnees: VerifierCourrielDto) {
-    return this.authentification.verifierCourriel(donnees.courriel, donnees.code);
+  verifyEmail(@Body() data: VerifyEmailDto) {
+    return this.auth.verifyEmail(data.courriel, data.code);
   }
 
   @Get("moi")
-  @ConfigurationLibre()
+  @SetupExempt()
   @ApiBearerAuth()
   @ApiOperation({ summary: "Consulter le compte associé au jeton courant." })
   @ApiResponse({ status: 200, description: "Profil de l'utilisateur authentifié." })
   @ApiResponse({ status: 401, description: "Jeton absent, expiré ou compte inactif." })
   @UseGuards(JwtAuthGuard)
-  moi(@CurrentUser() utilisateur: AuthenticatedUser) {
-    return this.authentification.obtenirMonCompte(utilisateur.id);
+  getCurrentUser(@CurrentUser() user: AuthenticatedUser) {
+    return this.auth.getMyAccount(user.id);
   }
 
   @Patch("mot-de-passe")
-  @ConfigurationLibre()
+  @SetupExempt()
   @ApiBearerAuth()
   @ApiOperation({ summary: "Modifier le mot de passe de la session authentifiée." })
   @ApiResponse({ status: 200, description: "Mot de passe modifié." })
   @ApiResponse({ status: 400, description: "Mot de passe courant ou nouveau mot de passe invalide." })
   @ApiResponse({ status: 401, description: "Jeton absent, expiré ou mot de passe courant incorrect." })
   @UseGuards(JwtAuthGuard)
-  changerMotDePasse(
-    @CurrentUser() utilisateur: AuthenticatedUser,
-    @Body() donnees: ChangePasswordDto,
+  changePassword(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() data: ChangePasswordDto,
   ) {
-    return this.authentification.changerMotDePasse(utilisateur.id, donnees);
+    return this.auth.changePassword(user.id, data);
   }
 }

@@ -25,8 +25,8 @@ import { isValidEmail } from "../notifications/mail.service";
 import { CreateTaxpayerDto } from "./dto/create-taxpayer.dto";
 import { UpdateTaxpayerProfileDto } from "./dto/update-taxpayer-profile.dto";
 
-/** État détaillé d'une ligne d'import Excel. */
-export interface LigneImport {
+/** Detailed status of an Excel import row. */
+export interface ImportRowResult {
   ligne: number;
   libelle: string;
   statut: "COMPTE_CREE" | "PROFIL_CREE" | "DOUBLON" | "REJETE";
@@ -41,110 +41,110 @@ export interface LigneImport {
 export class TaxpayersService {
   constructor(
     @InjectRepository(TaxpayerEntity)
-    private readonly contribuables: Repository<TaxpayerEntity>,
+    private readonly taxpayers: Repository<TaxpayerEntity>,
     @InjectRepository(UserEntity)
-    private readonly utilisateurs: Repository<UserEntity>,
-    private readonly sourceDeDonnees: DataSource,
+    private readonly users: Repository<UserEntity>,
+    private readonly dataSource: DataSource,
     private readonly configuration: ConfigService,
     private readonly activation: ActivationService,
   ) {}
 
-  async obtenirMonProfil(utilisateur: AuthenticatedUser) {
-    if (!utilisateur.contribuableId)
+  async getMyProfile(user: AuthenticatedUser) {
+    if (!user.taxpayerId)
       throw new NotFoundException(
         "Aucun profil contribuable n'est lié à ce compte.",
       );
-    const contribuable = await this.contribuables.findOne({
-      where: { id: utilisateur.contribuableId, region: SRE_REGION },
-      relations: { utilisateur: true },
+    const taxpayer = await this.taxpayers.findOne({
+      where: { id: user.taxpayerId, region: SRE_REGION },
+      relations: { user: true },
     });
-    if (!contribuable)
+    if (!taxpayer)
       throw new NotFoundException(
         "Profil contribuable introuvable dans le périmètre Haute Matsiatra.",
       );
-    return this.vueContribuable(contribuable);
+    return this.toTaxpayerView(taxpayer);
   }
 
-  async modifierMonProfil(
-    utilisateur: AuthenticatedUser,
-    donnees: UpdateTaxpayerProfileDto,
+  async updateMyProfile(
+    user: AuthenticatedUser,
+    data: UpdateTaxpayerProfileDto,
   ) {
-    if (!utilisateur.contribuableId)
+    if (!user.taxpayerId)
       throw new NotFoundException(
         "Aucun profil contribuable n'est lié à ce compte.",
       );
-    const contribuable = await this.contribuables.findOne({
-      where: { id: utilisateur.contribuableId, region: SRE_REGION },
-      relations: { utilisateur: true },
+    const taxpayer = await this.taxpayers.findOne({
+      where: { id: user.taxpayerId, region: SRE_REGION },
+      relations: { user: true },
     });
-    if (!contribuable)
+    if (!taxpayer)
       throw new NotFoundException("Profil contribuable introuvable.");
     if (
-      donnees.nomCommercial !== undefined &&
-      contribuable.type !== "ENTREPRISE"
+      data.nomCommercial !== undefined &&
+      taxpayer.type !== "ENTREPRISE"
     ) {
       throw new BadRequestException(
         "Le nom commercial ne concerne que les profils entreprise.",
       );
     }
-    if (donnees.adresse !== undefined)
-      contribuable.adresse = donnees.adresse.trim();
-    if (donnees.ville !== undefined) contribuable.ville = donnees.ville.trim();
-    if (donnees.telephone !== undefined)
-      contribuable.telephone = donnees.telephone.trim();
-    if (donnees.nomCommercial !== undefined)
-      contribuable.nomCommercial = donnees.nomCommercial.trim() || null;
-    return this.vueContribuable(await this.contribuables.save(contribuable));
+    if (data.adresse !== undefined)
+      taxpayer.address = data.adresse.trim();
+    if (data.ville !== undefined) taxpayer.city = data.ville.trim();
+    if (data.telephone !== undefined)
+      taxpayer.phone = data.telephone.trim();
+    if (data.nomCommercial !== undefined)
+      taxpayer.tradeName = data.nomCommercial.trim() || null;
+    return this.toTaxpayerView(await this.taxpayers.save(taxpayer));
   }
 
-  async lister(recherche = "", page = 1, parPage = 25) {
-    const numeroPage = Math.max(1, Math.floor(page) || 1);
-    const taillePage = Math.min(100, Math.max(1, Math.floor(parPage) || 25));
-    const terme = recherche.trim();
-    const requete = this.contribuables
-      .createQueryBuilder("contribuable")
-      .leftJoinAndSelect("contribuable.utilisateur", "utilisateur")
-      .where("contribuable.region = :region", { region: SRE_REGION })
-      .orderBy("contribuable.creeLe", "DESC");
-    if (terme) {
-      requete.andWhere(
-        "contribuable.nom ILIKE :terme OR contribuable.prenom ILIKE :terme OR contribuable.raison_sociale ILIKE :terme OR contribuable.nif ILIKE :terme OR contribuable.courriel ILIKE :terme",
-        { terme: `%${terme}%` },
+  async list(search = "", page = 1, perPage = 25) {
+    const pageNumber = Math.max(1, Math.floor(page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Math.floor(perPage) || 25));
+    const term = search.trim();
+    const request = this.taxpayers
+      .createQueryBuilder("taxpayer")
+      .leftJoinAndSelect("taxpayer.user", "user")
+      .where("taxpayer.region = :region", { region: SRE_REGION })
+      .orderBy("taxpayer.createdAt", "DESC");
+    if (term) {
+      request.andWhere(
+        "taxpayer.lastName ILIKE :term OR taxpayer.firstName ILIKE :term OR taxpayer.legalName ILIKE :term OR taxpayer.nif ILIKE :term OR taxpayer.email ILIKE :term",
+        { term: `%${term}%` },
       );
     }
-    const [lignes, total] = await requete
-      .skip((numeroPage - 1) * taillePage)
-      .take(taillePage)
+    const [rows, total] = await request
+      .skip((pageNumber - 1) * pageSize)
+      .take(pageSize)
       .getManyAndCount();
     return {
-      donnees: lignes.map((contribuable) => this.vueContribuable(contribuable)),
+      donnees: rows.map((taxpayer) => this.toTaxpayerView(taxpayer)),
       total,
-      page: numeroPage,
-      parPage: taillePage,
+      page: pageNumber,
+      parPage: pageSize,
     };
   }
 
-  async obtenirUne(id: string) {
-    const contribuable = await this.contribuables.findOne({
+  async getOne(id: string) {
+    const taxpayer = await this.taxpayers.findOne({
       where: { id, region: SRE_REGION },
-      relations: { utilisateur: true },
+      relations: { user: true },
     });
-    if (!contribuable)
+    if (!taxpayer)
       throw new NotFoundException(
         "Contribuable introuvable dans le périmètre Haute Matsiatra.",
       );
-    return this.vueContribuable(contribuable);
+    return this.toTaxpayerView(taxpayer);
   }
 
-  async creerPourAdministration(donnees: CreateTaxpayerDto) {
-    const courriel = donnees.courriel.trim().toLowerCase();
-    const nif = donnees.nif?.trim().toUpperCase() || null;
-    const stat = donnees.stat?.trim().toUpperCase() || null;
+  async createForAdministration(data: CreateTaxpayerDto) {
+    const email = data.courriel.trim().toLowerCase();
+    const nif = data.nif?.trim().toUpperCase() || null;
+    const stat = data.stat?.trim().toUpperCase() || null;
     if (
-      (await this.utilisateurs.exist({ where: { courriel } })) ||
-      (await this.contribuables.exist({
+      (await this.users.exist({ where: { email } })) ||
+      (await this.taxpayers.exist({
         where: [
-          { courriel },
+          { email },
           ...(nif ? [{ nif }] : []),
           ...(stat ? [{ stat }] : []),
         ],
@@ -154,353 +154,353 @@ export class TaxpayersService {
         "Un profil utilise déjà cette adresse e-mail, ce NIF ou ce STAT.",
       );
     }
-    const profil = this.contribuables.create({
-      utilisateur: null,
-      type: donnees.type,
-      nom: donnees.nom.trim(),
-      prenom: donnees.prenom?.trim() || null,
-      raisonSociale: donnees.raisonSociale?.trim() || null,
-      nomCommercial: donnees.nomCommercial?.trim() || null,
+    const profile = this.taxpayers.create({
+      user: null,
+      type: data.type,
+      lastName: data.nom.trim(),
+      firstName: data.prenom?.trim() || null,
+      legalName: data.raisonSociale?.trim() || null,
+      tradeName: data.nomCommercial?.trim() || null,
       nif,
       stat,
-      adresse: donnees.adresse.trim(),
+      address: data.adresse.trim(),
       region: SRE_REGION,
-      ville: donnees.ville.trim(),
-      courriel,
-      telephone: donnees.telephone.trim(),
-      representantLegal: donnees.representantLegal?.trim() || null,
-      nomContact: donnees.nomContact?.trim() || null,
-      prenomContact: donnees.prenomContact?.trim() || null,
-      fonctionContact: donnees.fonctionContact?.trim() || null,
-      dateCreationCompte: new Date(),
+      city: data.ville.trim(),
+      email,
+      phone: data.telephone.trim(),
+      legalRepresentative: data.representantLegal?.trim() || null,
+      contactLastName: data.nomContact?.trim() || null,
+      contactFirstName: data.prenomContact?.trim() || null,
+      contactRole: data.fonctionContact?.trim() || null,
+      accountCreatedAt: new Date(),
     });
-    return this.vueContribuable(await this.contribuables.save(profil));
+    return this.toTaxpayerView(await this.taxpayers.save(profile));
   }
 
   /**
-   * Import Excel (données lues et pré-validées côté client, validées puis
-   * enregistrées ici) :
-   * - chaque ligne reçoit un état détaillé (compte créé, profil créé, doublon,
-   *   rejetée avec ses erreurs) ;
-   * - chaque entreprise valide (raison sociale + e-mail + STAT) reçoit un
-   *   compte distinct lié à son profil, avec le STAT comme mot de passe
-   *   provisoire haché (jamais stocké en clair) ;
-   * - un courriel d'activation (lien à usage unique + identifiants provisoires)
-   *   est déclenché pour chaque compte créé, avec suivi d'envoi et réessai ;
-   * - idempotence : une nouvelle importation du même fichier ne crée aucun
-   *   compte ni profil en double (doublons signalés ligne par ligne).
+   * Excel import (data read and pre-validated client-side, validated then
+   * stored here):
+   * - each row gets a detailed status (account created, profile created, duplicate,
+   *   rejected with its errors);
+   * - each valid business (legal name + e-mail + STAT) gets a
+   *   distinct account linked to its profile, with the STAT number as hashed
+   *   provisional password (never stored in plain text);
+   * - an activation e-mail (single-use link + provisional credentials)
+   *   is triggered for every created account, with delivery tracking and retry;
+   * - idempotency: importing the same file again creates no duplicate
+   *   account or profile (duplicates reported row by row).
    */
-  async importer(profils: CreateTaxpayerDto[]) {
-    if (!profils.length)
+  async importTaxpayers(profiles: CreateTaxpayerDto[]) {
+    if (!profiles.length)
       throw new BadRequestException(
         "Aucun profil à importer n'a été transmis.",
       );
 
-    // Hachage des mots de passe provisoires en parallèle AVANT la transaction
-    // (bcrypt est coûteux : la transaction reste courte).
-    const tours = Number(this.configuration.get<string>("BCRYPT_ROUNDS", "12"));
-    const typesDeLigne = profils.map((donnees) => {
-      const courriel = donnees.courriel?.trim().toLowerCase() ?? "";
-      const stat = donnees.stat?.trim().toUpperCase() || null;
-      const estEntrepriseAvecCompte =
-        donnees.type === TaxpayerType.ENTREPRISE &&
+    // Hashing of provisional passwords in parallel BEFORE the transaction
+    // (bcrypt is expensive: keep the transaction short).
+    const rounds = Number(this.configuration.get<string>("BCRYPT_ROUNDS", "12"));
+    const rowTypes = profiles.map((data) => {
+      const email = data.courriel?.trim().toLowerCase() ?? "";
+      const stat = data.stat?.trim().toUpperCase() || null;
+      const isBusinessWithAccount =
+        data.type === TaxpayerType.BUSINESS &&
         Boolean(stat) &&
-        isValidEmail(courriel) &&
-        Boolean(donnees.raisonSociale?.trim());
-      return { courriel, stat, estEntrepriseAvecCompte };
+        isValidEmail(email) &&
+        Boolean(data.raisonSociale?.trim());
+      return { email, stat, isBusinessWithAccount };
     });
     const hashes = await Promise.all(
-      typesDeLigne.map((entree) =>
-        entree.estEntrepriseAvecCompte && entree.stat
-          ? bcrypt.hash(entree.stat, tours)
+      rowTypes.map((entry) =>
+        entry.isBusinessWithAccount && entry.stat
+          ? bcrypt.hash(entry.stat, rounds)
           : Promise.resolve(null),
       ),
     );
 
-    const resultat = await this.sourceDeDonnees.transaction(
-      async (gestionnaire) => {
-        const depotContribuables = gestionnaire.getRepository(TaxpayerEntity);
-        const depotUtilisateurs = gestionnaire.getRepository(UserEntity);
-        const existants = await depotContribuables.find({
-          select: { courriel: true, nif: true, stat: true },
+    const result = await this.dataSource.transaction(
+      async (manager) => {
+        const taxpayersRepository = manager.getRepository(TaxpayerEntity);
+        const usersRepository = manager.getRepository(UserEntity);
+        const existing = await taxpayersRepository.find({
+          select: { email: true, nif: true, stat: true },
         });
-        const comptes = await depotUtilisateurs.find({
-          select: { courriel: true },
+        const accounts = await usersRepository.find({
+          select: { email: true },
         });
-        const courriels = new Set([
-          ...existants.map((entree) => entree.courriel.toLowerCase()),
-          ...comptes.map((entree) => entree.courriel.toLowerCase()),
+        const emails = new Set([
+          ...existing.map((entry) => entry.email.toLowerCase()),
+          ...accounts.map((entry) => entry.email.toLowerCase()),
         ]);
         const nifs = new Set(
-          existants
-            .map((entree) => entree.nif?.toUpperCase())
-            .filter((valeur): valeur is string => Boolean(valeur)),
+          existing
+            .map((entry) => entry.nif?.toUpperCase())
+            .filter((value): value is string => Boolean(value)),
         );
         const stats = new Set(
-          existants
-            .map((entree) => entree.stat?.toUpperCase())
-            .filter((valeur): valeur is string => Boolean(valeur)),
+          existing
+            .map((entry) => entry.stat?.toUpperCase())
+            .filter((value): value is string => Boolean(value)),
         );
 
-        const rapport: LigneImport[] = [];
-        const nouveaux: TaxpayerEntity[] = [];
-        const comptesCrees: {
-          utilisateur: UserEntity;
-          libelle: string;
+        const report: ImportRowResult[] = [];
+        const newProfiles: TaxpayerEntity[] = [];
+        const accountsCreated: {
+          user: UserEntity;
+          label: string;
           stat: string;
         }[] = [];
-        let ignorees = 0;
-        let doublons = 0;
-        let rejetees = 0;
-        let comptesCreesNombre = 0;
+        let ignored = 0;
+        let duplicates = 0;
+        let rejected = 0;
+        let accountsCreatedCount = 0;
 
-        for (const [index, donnees] of profils.entries()) {
-          const ligne = index + 1;
-          const entree = typesDeLigne[index];
-          const courriel = entree.courriel;
-          const stat = entree.stat;
-          const nif = donnees.nif?.trim().toUpperCase() || null;
-          const libelle =
-            donnees.raisonSociale?.trim() || donnees.nom?.trim() || courriel;
-          const erreurs: string[] = [];
+        for (const [index, data] of profiles.entries()) {
+          const row = index + 1;
+          const entry = rowTypes[index];
+          const email = entry.email;
+          const stat = entry.stat;
+          const nif = data.nif?.trim().toUpperCase() || null;
+          const label =
+            data.raisonSociale?.trim() || data.nom?.trim() || email;
+          const errors: string[] = [];
 
-          // 1. Présence et validité des informations nécessaires.
-          if (!isValidEmail(courriel))
-            erreurs.push("Adresse e-mail absente ou invalide.");
-          if (donnees.type === TaxpayerType.ENTREPRISE) {
-            if (!donnees.raisonSociale?.trim())
-              erreurs.push("Raison sociale manquante.");
-            if (!stat) erreurs.push("Numéro STAT manquant.");
+          // 1. Presence and validity of the required information.
+          if (!isValidEmail(email))
+            errors.push("Adresse e-mail absente ou invalide.");
+          if (data.type === TaxpayerType.BUSINESS) {
+            if (!data.raisonSociale?.trim())
+              errors.push("Raison sociale manquante.");
+            if (!stat) errors.push("Numéro STAT manquant.");
           }
-          if (erreurs.length) {
-            rejetees += 1;
-            rapport.push({ ligne, libelle, statut: "REJETE", erreurs });
+          if (errors.length) {
+            rejected += 1;
+            report.push({ ligne: row, libelle: label, statut: "REJETE", erreurs: errors });
             continue;
           }
 
-          // 2. Doublons (e-mail, NIF, STAT déjà enregistrés).
-          if (courriels.has(courriel)) {
-            doublons += 1;
-            ignorees += 1;
-            rapport.push({
-              ligne,
-              libelle,
+          // 2. Duplicates (e-mail, NIF, STAT already registered).
+          if (emails.has(email)) {
+            duplicates += 1;
+            ignored += 1;
+            report.push({
+              ligne: row,
+              libelle: label,
               statut: "DOUBLON",
               motif: "Adresse e-mail déjà enregistrée (profil ou compte existant).",
             });
             continue;
           }
           if (nif && nifs.has(nif)) {
-            doublons += 1;
-            ignorees += 1;
-            rapport.push({
-              ligne,
-              libelle,
+            duplicates += 1;
+            ignored += 1;
+            report.push({
+              ligne: row,
+              libelle: label,
               statut: "DOUBLON",
               motif: "NIF déjà enregistré.",
             });
             continue;
           }
           if (stat && stats.has(stat)) {
-            doublons += 1;
-            ignorees += 1;
-            rapport.push({
-              ligne,
-              libelle,
+            duplicates += 1;
+            ignored += 1;
+            report.push({
+              ligne: row,
+              libelle: label,
               statut: "DOUBLON",
               motif: "Numéro STAT déjà enregistré.",
             });
             continue;
           }
 
-          // 3. Création du profil, puis du compte pour les entreprises valides.
-          const profil = depotContribuables.create({
-            utilisateur: null,
-            type: donnees.type,
-            nom: donnees.nom.trim(),
-            prenom: donnees.prenom?.trim() || null,
-            raisonSociale: donnees.raisonSociale?.trim() || null,
-            nomCommercial: donnees.nomCommercial?.trim() || null,
+          // 3. Profile creation, then account creation for valid businesses.
+          const profile = taxpayersRepository.create({
+            user: null,
+            type: data.type,
+            lastName: data.nom.trim(),
+            firstName: data.prenom?.trim() || null,
+            legalName: data.raisonSociale?.trim() || null,
+            tradeName: data.nomCommercial?.trim() || null,
             nif,
             stat,
-            adresse: donnees.adresse.trim(),
+            address: data.adresse.trim(),
             region: SRE_REGION,
-            ville: donnees.ville.trim(),
-            courriel,
-            telephone: donnees.telephone.trim(),
-            representantLegal: donnees.representantLegal?.trim() || null,
-            nomContact: donnees.nomContact?.trim() || null,
-            prenomContact: donnees.prenomContact?.trim() || null,
-            fonctionContact: donnees.fonctionContact?.trim() || null,
-            dateCreationCompte: new Date(),
+            city: data.ville.trim(),
+            email,
+            phone: data.telephone.trim(),
+            legalRepresentative: data.representantLegal?.trim() || null,
+            contactLastName: data.nomContact?.trim() || null,
+            contactFirstName: data.prenomContact?.trim() || null,
+            contactRole: data.fonctionContact?.trim() || null,
+            accountCreatedAt: new Date(),
           });
-          const profilEnregistre = await depotContribuables.save(profil);
-          nouveaux.push(profilEnregistre);
-          courriels.add(courriel);
+          const savedProfile = await taxpayersRepository.save(profile);
+          newProfiles.push(savedProfile);
+          emails.add(email);
           if (nif) nifs.add(nif);
           if (stat) stats.add(stat);
 
-          if (entree.estEntrepriseAvecCompte && stat && hashes[index]) {
-            // Compte distinct : STAT = mot de passe provisoire (haché),
-            // configuration initiale obligatoire avant tout accès métier.
-            const utilisateur = await depotUtilisateurs.save(
-              depotUtilisateurs.create({
-                nom: libelle.slice(0, 160),
-                courriel,
-                motDePasseHash: hashes[index] as string,
+          if (entry.isBusinessWithAccount && stat && hashes[index]) {
+            // Distinct account: STAT = provisional password (hashed),
+            // mandatory initial setup before any business access.
+            const user = await usersRepository.save(
+              usersRepository.create({
+                name: label.slice(0, 160),
+                email,
+                passwordHash: hashes[index] as string,
                 role: AccountRole.CLIENT,
-                statut: AccountStatus.ACTIF,
-                changementMotDePasseRequis: true,
-                profilComplete: false,
+                status: AccountStatus.ACTIVE,
+                mustChangePassword: true,
+                isProfileComplete: false,
               }),
             );
-            profilEnregistre.utilisateur = utilisateur;
-            await depotContribuables.save(profilEnregistre);
-            comptesCreesNombre += 1;
-            comptesCrees.push({ utilisateur, libelle, stat });
-            rapport.push({
-              ligne,
-              libelle,
+            savedProfile.user = user;
+            await taxpayersRepository.save(savedProfile);
+            accountsCreatedCount += 1;
+            accountsCreated.push({ user, label, stat });
+            report.push({
+              ligne: row,
+              libelle: label,
               statut: "COMPTE_CREE",
-              profilId: profilEnregistre.id,
-              compteId: utilisateur.id,
+              profilId: savedProfile.id,
+              compteId: user.id,
             });
           } else {
-            rapport.push({
-              ligne,
-              libelle,
+            report.push({
+              ligne: row,
+              libelle: label,
               statut: "PROFIL_CREE",
-              profilId: profilEnregistre.id,
+              profilId: savedProfile.id,
             });
           }
         }
 
         return {
-          rapport,
-          donnees: nouveaux.map((contribuable) =>
-            this.vueContribuable(contribuable),
+          rapport: report,
+          donnees: newProfiles.map((taxpayer) =>
+            this.toTaxpayerView(taxpayer),
           ),
-          creees: nouveaux.length,
-          ignorees,
-          comptesCrees: comptesCreesNombre,
-          doublons,
-          rejetees,
-          comptes: comptesCrees.map((entree) => ({
-            utilisateur: entree.utilisateur,
-            libelle: entree.libelle,
-            stat: entree.stat,
+          creees: newProfiles.length,
+          ignorees: ignored,
+          comptesCrees: accountsCreatedCount,
+          doublons: duplicates,
+          rejetees: rejected,
+          comptes: accountsCreated.map((entry) => ({
+            utilisateur: entry.user,
+            libelle: entry.label,
+            stat: entry.stat,
           })),
         };
       },
     );
 
-    // 4. Courriels de première connexion, hors transaction : un échec d'envoi
-    // n'annule pas la création des comptes (statut suivi + réessai par l'admin).
+    // 4. First-sign-in e-mails, outside the transaction: a delivery failure
+    // does not cancel account creation (tracked status + retry by the admin).
     const emails = [];
-    for (const entree of resultat.comptes) {
+    for (const entry of result.comptes) {
       try {
-        const demande = await this.activation.creerDemandeActivation(
-          entree.utilisateur,
-          entree.libelle,
-          entree.stat,
+        const request = await this.activation.createActivationRequest(
+          entry.utilisateur,
+          entry.libelle,
+          entry.stat,
         );
         emails.push({
-          compteId: entree.utilisateur.id,
-          destinataire: demande.destinataire,
-          statutCourriel: demande.statutCourriel,
-          demandeId: demande.id,
+          compteId: entry.utilisateur.id,
+          destinataire: request.destinataire,
+          statutCourriel: request.statutCourriel,
+          demandeId: request.id,
         });
       } catch {
         emails.push({
-          compteId: entree.utilisateur.id,
-          destinataire: entree.utilisateur.courriel,
-          statutCourriel: ActivationEmailStatus.ECHEC,
+          compteId: entry.utilisateur.id,
+          destinataire: entry.utilisateur.email,
+          statutCourriel: ActivationEmailStatus.FAILED,
           demandeId: null,
         });
       }
     }
-    for (const entree of resultat.rapport) {
-      if (entree.statut === "COMPTE_CREE") {
-        const email = emails.find((e) => e.compteId === entree.compteId);
-        if (email) entree.statutCourriel = email.statutCourriel;
+    for (const entry of result.rapport) {
+      if (entry.statut === "COMPTE_CREE") {
+        const email = emails.find((e) => e.compteId === entry.compteId);
+        if (email) entry.statutCourriel = email.statutCourriel;
       }
     }
 
     return {
-      donnees: resultat.donnees,
-      creees: resultat.creees,
-      ignorees: resultat.ignorees,
-      rapport: resultat.rapport,
-      comptesCrees: resultat.comptesCrees,
-      doublons: resultat.doublons,
-      rejetees: resultat.rejetees,
+      donnees: result.donnees,
+      creees: result.creees,
+      ignorees: result.ignorees,
+      rapport: result.rapport,
+      comptesCrees: result.comptesCrees,
+      doublons: result.doublons,
+      rejetees: result.rejetees,
       emails,
     };
   }
 
-  async supprimer(id: string) {
-    return this.sourceDeDonnees.transaction(async (gestionnaire) => {
-      const depotContribuables = gestionnaire.getRepository(TaxpayerEntity);
-      // PostgreSQL interdit FOR UPDATE sur le côté nullable d'une jointure
-      // externe : on verrouille d'abord la seule ligne contribuable, puis on
-      // charge la relation utilisateur (facultative) hors du verrou.
-      const verrou = await depotContribuables.findOne({
+  async remove(id: string) {
+    return this.dataSource.transaction(async (manager) => {
+      const taxpayersRepository = manager.getRepository(TaxpayerEntity);
+      // PostgreSQL forbids FOR UPDATE on the nullable side of a join
+      // outer join: lock the taxpayer row alone first, then
+      // load the (optional) user relation outside the lock.
+      const lock = await taxpayersRepository.findOne({
         where: { id, region: SRE_REGION },
         lock: { mode: "pessimistic_write" },
       });
-      if (!verrou) throw new NotFoundException("Contribuable introuvable.");
-      const contribuable = await depotContribuables.findOne({
+      if (!lock) throw new NotFoundException("Contribuable introuvable.");
+      const taxpayer = await taxpayersRepository.findOne({
         where: { id, region: SRE_REGION },
-        relations: { utilisateur: true },
+        relations: { user: true },
       });
-      if (!contribuable)
+      if (!taxpayer)
         throw new NotFoundException("Contribuable introuvable.");
-      if (contribuable.utilisateur) {
+      if (taxpayer.user) {
         throw new ConflictException(
           "Ce profil est associé à un compte utilisateur. Désactivez le compte plutôt que de supprimer son dossier.",
         );
       }
-      const [aDesObligations, aDesPaiements] = await Promise.all([
-        gestionnaire
+      const [hasObligations, hasPayments] = await Promise.all([
+        manager
           .getRepository(ObligationEntity)
-          .exist({ where: { contribuable: { id } } }),
-        gestionnaire
+          .exist({ where: { taxpayer: { id } } }),
+        manager
           .getRepository(PaymentEntity)
-          .exist({ where: { contribuable: { id } } }),
+          .exist({ where: { taxpayer: { id } } }),
       ]);
-      if (aDesObligations || aDesPaiements) {
+      if (hasObligations || hasPayments) {
         throw new ConflictException(
           "Ce profil possède un historique fiscal ou de paiement et ne peut pas être supprimé.",
         );
       }
-      await depotContribuables.remove(contribuable);
+      await taxpayersRepository.remove(taxpayer);
       return { message: "Le profil contribuable a été supprimé." };
     });
   }
 
-  private vueContribuable(contribuable: TaxpayerEntity) {
+  private toTaxpayerView(taxpayer: TaxpayerEntity) {
     return {
-      id: contribuable.id,
-      utilisateurId: contribuable.utilisateur?.id,
-      type: contribuable.type,
-      nom: contribuable.nom,
-      prenom: contribuable.prenom,
-      raisonSociale: contribuable.raisonSociale,
-      nomCommercial: contribuable.nomCommercial,
-      nif: contribuable.nif,
-      stat: contribuable.stat,
-      adresse: contribuable.adresse,
-      region: contribuable.region,
-      ville: contribuable.ville,
-      courriel: contribuable.courriel,
-      telephone: contribuable.telephone,
-      representantLegal: contribuable.representantLegal,
-      nomContact: contribuable.nomContact,
-      prenomContact: contribuable.prenomContact,
-      fonctionContact: contribuable.fonctionContact,
-      dateCreationCompte: contribuable.dateCreationCompte,
-      creeLe: contribuable.creeLe,
-      statutCompte: contribuable.utilisateur?.statut ?? null,
+      id: taxpayer.id,
+      utilisateurId: taxpayer.user?.id,
+      type: taxpayer.type,
+      nom: taxpayer.lastName,
+      prenom: taxpayer.firstName,
+      raisonSociale: taxpayer.legalName,
+      nomCommercial: taxpayer.tradeName,
+      nif: taxpayer.nif,
+      stat: taxpayer.stat,
+      adresse: taxpayer.address,
+      region: taxpayer.region,
+      ville: taxpayer.city,
+      courriel: taxpayer.email,
+      telephone: taxpayer.phone,
+      representantLegal: taxpayer.legalRepresentative,
+      nomContact: taxpayer.contactLastName,
+      prenomContact: taxpayer.contactFirstName,
+      fonctionContact: taxpayer.contactRole,
+      dateCreationCompte: taxpayer.accountCreatedAt,
+      creeLe: taxpayer.createdAt,
+      statutCompte: taxpayer.user?.status ?? null,
     };
   }
 }

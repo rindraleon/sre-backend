@@ -14,7 +14,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     configuration: ConfigService,
     @InjectRepository(UserEntity)
-    private readonly utilisateurs: Repository<UserEntity>,
+    private readonly users: Repository<UserEntity>,
   ) {
     const secret = configuration.getOrThrow<string>("JWT_SECRET").trim();
     if (secret.length < 32)
@@ -29,34 +29,34 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(
-    charge: Pick<AuthenticatedUser, "id">,
+    payload: Pick<AuthenticatedUser, "id">,
   ): Promise<AuthenticatedUser> {
-    if (!charge?.id) throw new UnauthorizedException("Jeton invalide.");
-    const utilisateur = await this.utilisateurs.findOne({
-      where: { id: charge.id },
-      relations: { contribuable: true },
+    if (!payload?.id) throw new UnauthorizedException("Jeton invalide.");
+    const user = await this.users.findOne({
+      where: { id: payload.id },
+      relations: { taxpayer: true },
     });
-    if (!utilisateur || utilisateur.statut !== AccountStatus.ACTIF) {
+    if (!user || user.status !== AccountStatus.ACTIVE) {
       throw new UnauthorizedException("Compte inactif ou introuvable.");
     }
     if (
-      utilisateur.role === AccountRole.CLIENT &&
-      utilisateur.contribuable?.region !== SRE_REGION
+      user.role === AccountRole.CLIENT &&
+      user.taxpayer?.region !== SRE_REGION
     ) {
       throw new UnauthorizedException(
         `L’espace contribuable est limité à ${SRE_REGION}.`,
       );
     }
     return {
-      id: utilisateur.id,
-      courriel: utilisateur.courriel,
-      nom: utilisateur.nom,
-      role: utilisateur.role,
-      ...(utilisateur.contribuable
-        ? { contribuableId: utilisateur.contribuable.id }
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      ...(user.taxpayer
+        ? { taxpayerId: user.taxpayer.id }
         : {}),
-      changementMotDePasseRequis: utilisateur.changementMotDePasseRequis,
-      profilComplete: utilisateur.profilComplete,
+      mustChangePassword: user.mustChangePassword,
+      isProfileComplete: user.isProfileComplete,
     };
   }
 }
