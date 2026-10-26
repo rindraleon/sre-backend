@@ -21,20 +21,13 @@ import { JournalActivite1760270405000 } from "./migrations/JournalActivite176027
 import { MessagesContact1760270406000 } from "./migrations/MessagesContact1760270406000";
 import { AmeliorationMessagerieNotifications1760270407000 } from "./migrations/AmeliorationMessagerieNotifications1760270407000";
 
-const databasePassword = process.env.DB_PASSWORD?.trim();
-if (!databasePassword)
-  throw new Error(
-    "DB_PASSWORD doit être renseigné avant d’exécuter les migrations.",
-  );
-
-const sreDataSource = new DataSource({
-  type: "postgres",
-  host: process.env.DB_HOST ?? "localhost",
-  port: Number(process.env.DB_PORT ?? 5432),
-  username: process.env.DB_USERNAME ?? "sre_app",
-  password: databasePassword,
-  database: process.env.DB_DATABASE ?? "sre_demo",
-  ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : false,
+const databaseUrl = process.env.DATABASE_URL?.trim();
+const sslEnabled =
+  process.env.DB_SSL === "true" ||
+  (Boolean(databaseUrl) && process.env.DB_SSL !== "false");
+const sharedOptions = {
+  type: "postgres" as const,
+  ssl: sslEnabled ? { rejectUnauthorized: false } : false,
   synchronize: false,
   entities: [
     UserEntity,
@@ -61,6 +54,27 @@ const sreDataSource = new DataSource({
     AmeliorationMessagerieNotifications1760270407000,
   ],
   migrationsTableName: "migrations_sre",
-});
+};
+
+const databasePassword = process.env.DB_PASSWORD?.trim();
+
+let sreDataSource: DataSource;
+
+if (databaseUrl) {
+  sreDataSource = new DataSource({ ...sharedOptions, url: databaseUrl });
+} else if (databasePassword) {
+  sreDataSource = new DataSource({
+    ...sharedOptions,
+    host: process.env.DB_HOST ?? "localhost",
+    port: Number(process.env.DB_PORT ?? 5432),
+    username: process.env.DB_USERNAME ?? "sre_app",
+    password: databasePassword,
+    database: process.env.DB_DATABASE ?? "sre_demo",
+  });
+} else {
+  throw new Error(
+    "DB_PASSWORD ou DATABASE_URL doit être renseigné avant d’exécuter les migrations.",
+  );
+}
 
 export default sreDataSource;
