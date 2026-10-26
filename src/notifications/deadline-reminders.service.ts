@@ -15,13 +15,7 @@ import {
   type MailSender,
 } from "./mail.service";
 
-/**
- * Reminder policy (initial parameters, NOT official tax rules):
- * days before due date and days overdue, configurable via
- * `RAPPELS_JOURS_AVANT` / `RAPPELS_JOURS_RETARD` (comma-separated lists).
- * Any change is an administrator's through configuration, never
- * hard-coded legal dates.
- */
+/** Reminder policy (initial parameters, NOT official tax rules): days before due date and days overdue, configurabl. */
 export interface ReminderPolicy {
   daysBefore: number[];
   daysOverdue: number[];
@@ -31,13 +25,7 @@ export interface ReminderPolicy {
 
 export const DEFAULT_TIMEZONE = "Indian/Antananarivo";
 
-/**
- * Statuses eligible for a reminder: the obligation is neither
- * settled (PAYE) nor awaiting a decision on a filed declaration
- * (PAIEMENT_EN_COURS / EN_VERIFICATION — a declared payment is never
- * presented as confirmed, but no reminder is sent during review).
- * REJETE / CORRECTION_DEMANDEE become due again after an unfavorable decision.
- */
+/** Statuses eligible for a reminder: the obligation is neither settled (PAYE) nor awaiting a decision on a filed de. */
 export const REMINDER_ELIGIBLE_STATUSES: ObligationStatus[] = [
   ObligationStatus.TO_PAY,
   ObligationStatus.OVERDUE,
@@ -61,12 +49,7 @@ export function civilDateInTimezone(
   return { year: read("year"), month: read("month"), day: read("day") };
 }
 
-/**
- * Number of civil days between "today" (in the business time zone) and the
- * due date `YYYY-MM-DD` stored in the database. Positive = upcoming,
- * 0 = today, negative = past. Working with civil dates avoids the
- * one-day shift around midnight between UTC and the local time zone.
- */
+/** Number of civil days between "today" (in the business time zone) and the due date `YYYY-MM-DD` stored in the dat. */
 export function daysUntilDeadline(
   dueDate: string,
   now: Date,
@@ -179,13 +162,7 @@ export class DeadlineReminderService {
     };
   }
 
-  /**
-   * Evaluates obligations and creates today's reminders. Idempotent:
-   * the unique user+obligation+type key prevents any duplicate, even on
-   * double execution or two concurrent instances (the losing concurrent
-   * insert is ignored, PostgreSQL code 23505).
-   * `now` is injectable to test dates without waiting for the calendar.
-   */
+  /** Evaluates obligations and creates today's reminders. */
   async processReminders(now: Date = new Date()): Promise<ReminderRunSummary> {
     const summary: ReminderRunSummary = {
       examinedObligations: 0,

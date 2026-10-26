@@ -1,10 +1,6 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from "typeorm";
 
-/**
- * Secure log of sign-in attempts (traceability and abuse
- * detection). No password or token is recorded; the IP address is
- * kept raw only to diagnose automated attempts.
- */
+/** Secure log of sign-in attempts (traceability and abuse detection). */
 @Entity({ name: "tentatives_connexion" })
 @Index("idx_tentatives_connexion_courriel_cree", ["email", "createdAt"])
 export class LoginAttemptEntity {

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   Inject,
   Injectable,
@@ -38,13 +38,7 @@ export interface ActivationRequestView {
   creeLe: Date;
 }
 
-/**
- * Single-purpose activation / reset tokens with controlled expiry,
- * and tracked sending of first-sign-in e-mails.
- * - the plain token only exists in the e-mail (SHA-256 fingerprint stored);
- * - every send is tracked (status, attempts, error) and retryable;
- * - a consumed or expired token is rejected, without exception.
- */
+/** Single-purpose activation / reset tokens with controlled expiry, and tracked sending of first-sign-in e-mails. */
 @Injectable()
 export class ActivationService {
   private readonly activityLog = new Logger(ActivationService.name);
@@ -64,17 +58,14 @@ export class ActivationService {
   }
 
   private getAppBaseUrl(): string {
-    return (
-      this.configuration.get<string>("APP_URL", "").trim().replace(/\/+$/, "") ||
-      ""
-    );
+    let baseUrl = this.configuration.get<string>("APP_URL", "").trim();
+    while (baseUrl.endsWith("/")) {
+      baseUrl = baseUrl.slice(0, -1);
+    }
+    return baseUrl;
   }
 
-  /**
-   * Creates an account's activation request (token + first-sign-in
-   * e-mail) and attempts immediate sending. Returns the request view,
-   * never the plain token.
-   */
+  /** Creates an account's activation request (token + first-sign-in e-mail) and attempts immediate sending. */
   async createActivationRequest(
     user: UserEntity,
     label: string,
@@ -122,9 +113,7 @@ export class ActivationService {
     const user = request.user;
     const token =
       knownToken ??
-      // On retry, the plain token is no longer available: a new token
-      // is issued (the previous one is invalidated) so a fingerprint is never reused
-      // and no secret is ever stored in plain text.
+      // On retry, the plain token is no longer available: a new token is issued (the previous one is invalidated) so a f.
       this.issueNewToken(request);
     const label =
       knownLabel ??
@@ -190,11 +179,7 @@ export class ActivationService {
     return this.toActivationRequestView(request);
   }
 
-  /**
-   * Creates a password reset request (single-use
-   * token) and sends the secure e-mail. No information about
-   * the account's existence ever leaves this method.
-   */
+  /** Creates a password reset request (single-use token) and sends the secure e-mail. */
   async createPasswordResetRequest(
     user: UserEntity,
   ): Promise<ActivationRequestView> {
@@ -271,10 +256,7 @@ export class ActivationService {
     return this.sendActivationEmail(requestId);
   }
 
-  /**
-   * Validates a token (type, expiry, single use) and returns the request.
-   * `consume` marks the token as used (call after processing).
-   */
+  /** Validates a token (type, expiry, single use) and returns the request. */
   async validateToken(
     token: string,
     type: ActivationTokenType,
@@ -285,8 +267,7 @@ export class ActivationService {
       relations: { user: true },
     });
     if (
-      !request ||
-      request.type !== type ||
+      request?.type !== type ||
       request.usedAt !== null ||
       request.expiresAt.getTime() < Date.now()
     ) {

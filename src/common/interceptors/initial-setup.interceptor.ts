@@ -4,12 +4,7 @@ import { Observable } from "rxjs";
 import { SETUP_EXEMPT_KEY } from "../decorators/setup-exempt.decorator";
 import { AuthenticatedUser } from "../interfaces/authenticated-user.interface";
 
-/**
- * Server-side blocking of business features during the initial setup:
- * as long as `mustChangePassword` is true or the profile is not completed,
- * only routes marked `@SetupExempt()` remain accessible to the
- * authenticated user. Public routes (with no attached user) are unaffected.
- */
+/** Server-side blocking of business features during the initial setup: as long as `mustChangePassword` is true or t. */
 @Injectable()
 export class InitialSetupInterceptor implements NestInterceptor {
   constructor(private readonly reflector: Reflector) {}

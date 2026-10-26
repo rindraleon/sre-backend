@@ -7,10 +7,7 @@ import {
 } from "class-validator";
 import { UpdateTaxpayerProfileDto } from "../../taxpayers/dto/update-taxpayer-profile.dto";
 
-/**
- * Initial setup (first sign-in): replacement of the provisional
- * password and profile validation, in a single atomic operation.
- */
+/** Initial setup (first sign-in): replacement of the provisional password and profile validation, in a single atomi. */
 export class InitialSetupDto {
   @ApiProperty({
     format: "password",

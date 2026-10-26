@@ -1,13 +1,6 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-/**
- * Première connexion des comptes créés par import :
- * - `utilisateurs.profil_complete` : état de complétion du profil (blocage
- *   serveur de la configuration initiale tant que non complété) ;
- * - `demandes_activation` : jetons d'activation / réinitialisation à usage
- *   limité (empreinte SHA-256, expiration contrôlée) et suivi d'envoi des
- *   courriels de première connexion (statut + tentatives + réessai).
- */
+/** Première connexion des comptes créés par import. */
 export class PremiereConnexionEntreprises1760270404000
   implements MigrationInterface
 {

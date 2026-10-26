@@ -7,17 +7,19 @@ import { ContactMessageEntity } from "../database/entities/contact-message.entit
 import { NotificationEntity } from "../database/entities/notification.entity";
 import { ObligationEntity } from "../database/entities/obligation.entity";
 import { UserEntity } from "../database/entities/user.entity";
+import { AcknowledgmentService } from "./acknowledgment.service";
 import { ActivationService } from "./activation.service";
+import { AdminNotificationService } from "./admin-notification.service";
 import { CampaignService } from "./campaign.service";
 import { ContactMessagesAdminController } from "./contact-messages-admin.controller";
-import { PublicContactController } from "./public-contact.controller";
-import { PublicContactService } from "./public-contact.service";
-import { MailService, MAIL_SERVICE } from "./mail.service";
-import { NotificationsController } from "./notifications.controller";
-import { NotificationsAdminController } from "./notifications-admin.controller";
-import { NotificationsService } from "./notifications.service";
 import { DeadlineReminderJob } from "./deadline-reminders.job";
 import { DeadlineReminderService } from "./deadline-reminders.service";
+import { MAIL_SERVICE, MailService } from "./mail.service";
+import { NotificationsAdminController } from "./notifications-admin.controller";
+import { NotificationsController } from "./notifications.controller";
+import { NotificationsService } from "./notifications.service";
+import { PublicContactController } from "./public-contact.controller";
+import { PublicContactService } from "./public-contact.service";
 
 @Module({
   imports: [
@@ -41,6 +43,8 @@ import { DeadlineReminderService } from "./deadline-reminders.service";
     CampaignService,
     ActivationService,
     PublicContactService,
+    AdminNotificationService,
+    AcknowledgmentService,
     DeadlineReminderService,
     DeadlineReminderJob,
     { provide: MAIL_SERVICE, useClass: MailService },
@@ -50,6 +54,9 @@ import { DeadlineReminderService } from "./deadline-reminders.service";
     NotificationsService,
     DeadlineReminderService,
     ActivationService,
+    PublicContactService,
+    AdminNotificationService,
+    AcknowledgmentService,
     MAIL_SERVICE,
   ],
 })

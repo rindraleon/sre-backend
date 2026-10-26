@@ -4,6 +4,7 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  Optional,
   UnauthorizedException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -14,22 +15,20 @@ import { DataSource, Repository } from "typeorm";
 import { LoginAttemptEntity } from "../database/entities/login-attempt.entity";
 import { TaxpayerEntity } from "../database/entities/taxpayer.entity";
 import { UserEntity } from "../database/entities/user.entity";
-import { AccountRole, AccountStatus } from "../database/enums";
-import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
+import { AccountRole, AccountStatus, ActivationTokenType } from "../database/enums";
 import {
   MAIL_SERVICE,
   MailSender,
   buildEmailHtml,
 } from "../notifications/mail.service";
+import { AcknowledgmentService } from "../notifications/acknowledgment.service";
+import { ActivationService } from "../notifications/activation.service";
+import { AdminNotificationService } from "../notifications/admin-notification.service";
 import { ChangePasswordDto } from "./dto/change-password.dto";
 import { InitialSetupDto } from "./dto/initial-setup.dto";
 import { ActivationConfirmationDto } from "./dto/activation-confirmation.dto";
 import { LoginDto } from "./dto/login.dto";
 import { RegistrationDto } from "./dto/registration.dto";
-import {
-  ActivationService,
-} from "../notifications/activation.service";
-import { ActivationTokenType } from "../database/enums";
 
 /** Distinct explicit messages (new authentication policy). */
 const MESSAGE_ACCOUNT_NOT_FOUND =
@@ -58,6 +57,10 @@ export class AuthService {
     private readonly configuration: ConfigService,
     private readonly activation: ActivationService,
     @Inject(MAIL_SERVICE) private readonly emails: MailSender,
+    @Optional()
+    private readonly adminNotifications?: AdminNotificationService,
+    @Optional()
+    private readonly acknowledgments?: AcknowledgmentService,
   ) {}
 
   async getRegistrationState() {
@@ -70,92 +73,120 @@ export class AuthService {
 
   async register(data: RegistrationDto) {
     const email = data.courriel.trim().toLowerCase();
-    const result = await this.dataSource.transaction(
-      async (manager) => {
-        // The transactional lock prevents two simultaneous registrations from obtaining the initial administrator role.
-        await manager.query("SELECT pg_advisory_xact_lock($1)", [
-          2026101201,
-        ]);
-        const usersRepository = manager.getRepository(UserEntity);
-        const userCount = await usersRepository.count();
-        const role =
-          userCount === 0 ? AccountRole.ADMIN : AccountRole.CLIENT;
+    const result = await this.dataSource.transaction(async (manager) => {
+      // The transactional lock prevents two simultaneous registrations from obtaining the initial administrator role.
+      await manager.query("SELECT pg_advisory_xact_lock($1)", [2026101201]);
+      const usersRepository = manager.getRepository(UserEntity);
+      const userCount = await usersRepository.count();
+      const role = userCount === 0 ? AccountRole.ADMIN : AccountRole.CLIENT;
 
-        if (await usersRepository.exist({ where: { email } })) {
-          throw new ConflictException(
-            "Cette adresse courriel est déjà utilisée.",
-          );
-        }
-        if (role === AccountRole.CLIENT && !data.profil) {
-          throw new BadRequestException(
-            "Un profil contribuable est requis pour créer un compte client.",
-          );
-        }
-        if (
-          data.profil &&
-          data.profil.courriel.trim().toLowerCase() !== email
-        ) {
-          throw new BadRequestException(
-            "L'adresse courriel du profil doit correspondre à celle du compte.",
-          );
-        }
-        if (role === AccountRole.CLIENT && data.profil) {
-          const taxpayersRepository = manager.getRepository(TaxpayerEntity);
-          const nif = data.profil.nif?.trim().toUpperCase();
-          const stat = data.profil.stat?.trim().toUpperCase();
-          if (nif && (await taxpayersRepository.exist({ where: { nif } }))) {
-            throw new ConflictException("Ce NIF est déjà associé à un profil.");
-          }
-          if (stat && (await taxpayersRepository.exist({ where: { stat } }))) {
-            throw new ConflictException(
-              "Ce STAT est déjà associé à un profil.",
-            );
-          }
-        }
-
-        const saltRounds = Number(
-          this.configuration.get<string>("BCRYPT_ROUNDS", "12"),
+      if (await usersRepository.exist({ where: { email } })) {
+        throw new ConflictException("Cette adresse courriel est déjà utilisée.");
+      }
+      if (role === AccountRole.CLIENT && !data.profil) {
+        throw new BadRequestException(
+          "Un profil contribuable est requis pour créer un compte client.",
         );
-        const newUser = usersRepository.create({
-          name: data.nom.trim(),
-          email,
-          passwordHash: await bcrypt.hash(data.motDePasse, saltRounds),
-          role,
-          status: AccountStatus.ACTIVE,
-          mustChangePassword: false,
-          lastLoginAt: new Date(),
-        });
-        await usersRepository.save(newUser);
-
-        let taxpayer: TaxpayerEntity | null = null;
-        if (role === AccountRole.CLIENT && data.profil) {
-          const taxpayersRepository = manager.getRepository(TaxpayerEntity);
-          const profile = data.profil;
-          taxpayer = taxpayersRepository.create({
-            user: newUser,
-            type: profile.type,
-            lastName: profile.nom.trim(),
-            firstName: profile.prenom?.trim() || null,
-            legalName: profile.raisonSociale?.trim() || null,
-            tradeName: profile.nomCommercial?.trim() || null,
-            nif: profile.nif?.trim().toUpperCase() || null,
-            stat: profile.stat?.trim().toUpperCase() || null,
-            address: profile.adresse.trim(),
-            region: profile.region.trim(),
-            city: profile.ville.trim(),
-            email,
-            phone: profile.telephone.trim(),
-            legalRepresentative: profile.representantLegal?.trim() || null,
-            contactLastName: profile.nomContact?.trim() || null,
-            contactFirstName: profile.prenomContact?.trim() || null,
-            contactRole: profile.fonctionContact?.trim() || null,
-            accountCreatedAt: new Date(),
-          });
-          await taxpayersRepository.save(taxpayer);
+      }
+      if (data.profil && data.profil.courriel.trim().toLowerCase() !== email) {
+        throw new BadRequestException(
+          "L'adresse courriel du profil doit correspondre à celle du compte.",
+        );
+      }
+      if (role === AccountRole.CLIENT && data.profil) {
+        const taxpayersRepository = manager.getRepository(TaxpayerEntity);
+        const nif = data.profil.nif?.trim().toUpperCase();
+        const stat = data.profil.stat?.trim().toUpperCase();
+        if (nif && (await taxpayersRepository.exist({ where: { nif } }))) {
+          throw new ConflictException("Ce NIF est déjà associé à un profil.");
         }
-        return { utilisateur: newUser, contribuable: taxpayer };
-      },
-    );
+        if (stat && (await taxpayersRepository.exist({ where: { stat } }))) {
+          throw new ConflictException("Ce STAT est déjà associé à un profil.");
+        }
+      }
+
+      const saltRounds = Number(
+        this.configuration.get<string>("BCRYPT_ROUNDS", "12"),
+      );
+      const newUser = usersRepository.create({
+        name: data.nom.trim(),
+        email,
+        passwordHash: await bcrypt.hash(data.motDePasse, saltRounds),
+        role,
+        status: AccountStatus.ACTIVE,
+        mustChangePassword: false,
+        lastLoginAt: new Date(),
+      });
+      await usersRepository.save(newUser);
+
+      let taxpayer: TaxpayerEntity | null = null;
+      if (role === AccountRole.CLIENT && data.profil) {
+        const taxpayersRepository = manager.getRepository(TaxpayerEntity);
+        const profile = data.profil;
+        taxpayer = taxpayersRepository.create({
+          user: newUser,
+          type: profile.type,
+          lastName: profile.nom.trim(),
+          firstName: profile.prenom?.trim() || null,
+          legalName: profile.raisonSociale?.trim() || null,
+          tradeName: profile.nomCommercial?.trim() || null,
+          nif: profile.nif?.trim().toUpperCase() || null,
+          stat: profile.stat?.trim().toUpperCase() || null,
+          address: profile.adresse.trim(),
+          region: profile.region.trim(),
+          city: profile.ville.trim(),
+          email,
+          phone: profile.telephone.trim(),
+          legalRepresentative: profile.representantLegal?.trim() || null,
+          contactLastName: profile.nomContact?.trim() || null,
+          contactFirstName: profile.prenomContact?.trim() || null,
+          contactRole: profile.fonctionContact?.trim() || null,
+          accountCreatedAt: new Date(),
+        });
+        await taxpayersRepository.save(taxpayer);
+      }
+      return { utilisateur: newUser, contribuable: taxpayer };
+    });
+
+    // Post-commit notifications for newly registered client accounts.
+    if (
+      result.utilisateur.role === AccountRole.CLIENT &&
+      result.contribuable
+    ) {
+      const tp = result.contribuable;
+      const displayName =
+        tp.legalName?.trim() ||
+        [tp.lastName, tp.firstName].filter(Boolean).join(" ").trim() ||
+        result.utilisateur.name;
+
+      if (this.adminNotifications) {
+        await this.adminNotifications.notifyClientRegistered({
+          userId: result.utilisateur.id,
+          taxpayerId: tp.id,
+          name: displayName,
+          email: result.utilisateur.email,
+          taxpayerType: tp.type,
+          nif: tp.nif,
+          stat: tp.stat,
+          city: tp.city,
+          registeredAt: result.utilisateur.createdAt ?? new Date(),
+        });
+      }
+
+      if (this.acknowledgments) {
+        await this.acknowledgments.sendRegistrationAcknowledgment({
+          user: result.utilisateur,
+          taxpayerId: tp.id,
+          recipientName: displayName,
+          recipientEmail: result.utilisateur.email,
+          taxpayerType: tp.type,
+          nif: tp.nif,
+          stat: tp.stat,
+          city: tp.city,
+          registeredAt: result.utilisateur.createdAt ?? new Date(),
+        });
+      }
+    }
 
     return this.buildTokenResponse(
       result.utilisateur,
@@ -163,14 +194,7 @@ export class AuthService {
     );
   }
 
-  /**
-   * Authentication: e-mail + password only.
-   * - first sign-in: the provisional password is the one provided when
-   *   the account was created (the STAT number serves as initial password and
-   *   is no longer a separate identity document);
-   * - subsequent sign-ins: the personal password set by the user;
-   * - every attempt is logged (without secrets) and time-limited.
-   */
+  /** Authentication: e-mail + password only. */
   async logIn(data: LoginDto, ipAddress?: string | null) {
     const email = data.courriel.trim().toLowerCase();
 
@@ -190,9 +214,7 @@ export class AuthService {
         reason = "compte_inactif";
         throw new UnauthorizedException(MESSAGE_ACCOUNT_INACTIVE);
       }
-      if (
-        !(await bcrypt.compare(data.motDePasse, user.passwordHash))
-      ) {
+      if (!(await bcrypt.compare(data.motDePasse, user.passwordHash))) {
         reason = "mot_de_passe";
         throw new UnauthorizedException(MESSAGE_PASSWORD_INVALID);
       }
@@ -201,10 +223,7 @@ export class AuthService {
       user.lastLoginAt = new Date();
       await this.users.save(user);
       await this.logAttempt(email, true, "ok", ipAddress);
-      return this.buildTokenResponse(
-        user,
-        user.taxpayer?.id,
-      );
+      return this.buildTokenResponse(user, user.taxpayer?.id);
     } catch (cause) {
       await this.logAttempt(email, false, reason, ipAddress);
       throw cause;
@@ -229,11 +248,7 @@ export class AuthService {
     }
   }
 
-  /**
-   * E-mail address verification request: single-use code valid for
-   * 24 h, stored as a fingerprint. The response is identical whether
-   * the account exists or not (no account enumeration).
-   */
+  /** E-mail address verification request: single-use code valid for 24 h, stored as a fingerprint. */
   async requestEmailVerification(email: string) {
     const address = email.trim().toLowerCase();
     const user = await this.users.findOne({
@@ -268,8 +283,7 @@ export class AuthService {
         }),
       });
     } catch {
-      // Without a configured transport, the code stays valid server-side but
-      // no send is announced as successful.
+      // Without a configured transport, the code stays valid server-side but.
     }
     return response;
   }
@@ -319,12 +333,7 @@ export class AuthService {
       .where("user.id = :userId", { userId: userId })
       .getOne();
     if (!user) throw new UnauthorizedException("Compte introuvable.");
-    if (
-      !(await bcrypt.compare(
-        data.motDePasseActuel,
-        user.passwordHash,
-      ))
-    ) {
+    if (!(await bcrypt.compare(data.motDePasseActuel, user.passwordHash))) {
       throw new BadRequestException("Le mot de passe actuel est incorrect.");
     }
 
@@ -337,16 +346,8 @@ export class AuthService {
     return { message: "Le mot de passe a été modifié." };
   }
 
-  /**
-   * Initial setup (first sign-in): replaces the provisional
-   * password (STAT number provided at creation) with a personal
-   * password, validates the profile and unlocks the workspace — in a single
-   * transaction. The provisional password is permanently invalidated.
-   */
-  async completeInitialSetup(
-    userId: string,
-    data: InitialSetupDto,
-  ) {
+  /** Initial setup (first sign-in): replaces the provisional password (STAT number provided at creation) with a perso. */
+  async completeInitialSetup(userId: string, data: InitialSetupDto) {
     const user = await this.users
       .createQueryBuilder("user")
       .addSelect("user.passwordHash")
@@ -356,22 +357,16 @@ export class AuthService {
     if (!user || user.status !== AccountStatus.ACTIVE) {
       throw new UnauthorizedException("Ce compte n'est pas actif.");
     }
-    if (
-      !user.mustChangePassword &&
-      user.isProfileComplete
-    ) {
+    if (!user.mustChangePassword && user.isProfileComplete) {
       throw new BadRequestException(
         "La configuration initiale de ce compte est déjà terminée. Utilisez le changement de mot de passe.",
       );
     }
-    if (
-      !(await bcrypt.compare(
-        data.motDePasseActuel,
-        user.passwordHash,
-      ))
-    ) {
+    if (!(await bcrypt.compare(data.motDePasseActuel, user.passwordHash))) {
       throw new BadRequestException("Le mot de passe actuel est incorrect.");
     }
+
+    const changedFields: string[] = ["Mot de passe personnel défini"];
 
     await this.dataSource.transaction(async (manager) => {
       const usersRepository = manager.getRepository(UserEntity);
@@ -386,17 +381,72 @@ export class AuthService {
       if (user.taxpayer && data.profil) {
         const taxpayersRepository = manager.getRepository(TaxpayerEntity);
         const profile = user.taxpayer;
-        if (data.profil.adresse !== undefined)
+        if (data.profil.adresse !== undefined) {
           profile.address = data.profil.adresse.trim();
-        if (data.profil.ville !== undefined)
+          changedFields.push("Adresse");
+        }
+        if (data.profil.ville !== undefined) {
           profile.city = data.profil.ville.trim();
-        if (data.profil.telephone !== undefined)
+          changedFields.push("Ville");
+        }
+        if (data.profil.telephone !== undefined) {
           profile.phone = data.profil.telephone.trim();
-        if (data.profil.nomCommercial !== undefined)
+          changedFields.push("Téléphone");
+        }
+        if (data.profil.nomCommercial !== undefined) {
           profile.tradeName = data.profil.nomCommercial.trim() || null;
+          changedFields.push("Nom commercial");
+        }
         await taxpayersRepository.save(profile);
       }
     });
+
+    if (user.role === AccountRole.CLIENT && user.taxpayer) {
+      const tp = user.taxpayer;
+      const displayName =
+        tp.legalName?.trim() ||
+        [tp.lastName, tp.firstName].filter(Boolean).join(" ").trim() ||
+        user.name;
+      const summaryRows = [
+        { label: "Contribuable", value: displayName },
+        ...(tp.nif ? [{ label: "NIF", value: tp.nif }] : []),
+        { label: "Ville", value: tp.city },
+        { label: "Téléphone", value: tp.phone },
+        {
+          label: "Éléments validés",
+          value: changedFields.join(", "),
+        },
+      ];
+
+      if (this.adminNotifications) {
+        await this.adminNotifications.notifyClientProfileUpdated({
+          userId: user.id,
+          taxpayerId: tp.id,
+          name: displayName,
+          email: tp.email || user.email,
+          taxpayerType: tp.type,
+          nif: tp.nif,
+          actionLabel:
+            "Activation et configuration initiale de l'espace contribuable",
+          summaryRows,
+          idempotencyToken: "INITIAL_SETUP",
+        });
+      }
+
+      if (this.acknowledgments) {
+        await this.acknowledgments.sendProfileUpdateAcknowledgment({
+          userId: user.id,
+          taxpayerId: tp.id,
+          recipientName: displayName,
+          recipientEmail: tp.email || user.email,
+          nif: tp.nif,
+          actionLabel:
+            "Activation et configuration initiale de votre espace contribuable",
+          summaryRows,
+          idempotencyToken: "INITIAL_SETUP",
+        });
+      }
+    }
 
     return {
       message:
@@ -426,11 +476,7 @@ export class AuthService {
     };
   }
 
-  /**
-   * Confirmation of a single-use activation link: sets the personal
-   * password, validates the profile and permanently invalidates the token and
-   * the provisional password.
-   */
+  /** Confirmation of a single-use activation link: sets the personal password, validates the profile and permanently. */
   async confirmActivation(token: string, data: ActivationConfirmationDto) {
     return this.dataSource.transaction(async (manager) => {
       const request = await this.activation.validateToken(
@@ -476,11 +522,7 @@ export class AuthService {
     });
   }
 
-  /**
-   * Password reset request: the response is always the
-   * same (no account enumeration); a single-use link is sent
-   * if an active account matches.
-   */
+  /** Password reset request: the response is always the same (no account enumeration); a single-use link is sent if a. */
   async requestPasswordReset(email: string) {
     const address = email.trim().toLowerCase();
     const response = {
@@ -527,10 +569,7 @@ export class AuthService {
     return `${visiblePrefix}${"*".repeat(Math.max(1, localPart.length - 2))}@${domain}`;
   }
 
-  private async buildTokenResponse(
-    user: UserEntity,
-    taxpayerId?: string,
-  ) {
+  private async buildTokenResponse(user: UserEntity, taxpayerId?: string) {
     // Token claim names (serialized format): kept as-is.
     const payload = {
       id: user.id,

@@ -8,12 +8,7 @@ import {
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 
-/**
- * Single error shape returned to the frontend:
- * { statusCode, message, errors?: { field: string[] }, timestamp }
- * No stack trace, no secret, no internal detail is exposed.
- * 5xx errors are logged server-side only.
- */
+/** Single error shape returned to the frontend: { statusCode, message, errors?: { field: string[] }, timestamp } No. */
 @Catch()
 export class HttpErrorFilter implements ExceptionFilter {
   private readonly activityLog = new Logger(HttpErrorFilter.name);

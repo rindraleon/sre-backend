@@ -4,16 +4,7 @@ import { TaxTypeEntity } from "../../database/entities/tax-type.entity";
 import { TaxpayerEntity } from "../../database/entities/taxpayer.entity";
 import { UserEntity } from "../../database/entities/user.entity";
 
-/**
- * Wire-compatibility views.
- *
- * Entity properties were renamed to English internally, but endpoints that
- * historically serialized entities directly must keep emitting the original
- * JSON keys. These functions restore the exact pre-refactor payloads:
- * scalar keys use the original names, and a relation key is only present
- * when the relation was actually loaded (mirroring how an unloaded
- * relation used to be absent from the JSON output).
- */
+/** Wire-compatibility views. */
 
 export interface TaxTypeView {
   id: string;
@@ -188,10 +179,14 @@ export function toTaxpayerEntityView(taxpayer: TaxpayerEntity): TaxpayerEntityVi
 export function toObligationEntityView(obligation: ObligationEntity): ObligationEntityView {
   return {
     id: obligation.id,
-    ...("taxpayer" in obligation
+    ...("taxpayer" in obligation &&
+    obligation.taxpayer !== undefined &&
+    obligation.taxpayer !== null
       ? { contribuable: toTaxpayerEntityView(obligation.taxpayer) }
       : {}),
-    ...("taxType" in obligation
+    ...("taxType" in obligation &&
+    obligation.taxType !== undefined &&
+    obligation.taxType !== null
       ? { typeImpot: toTaxTypeView(obligation.taxType) }
       : {}),
     referenceFiscale: obligation.taxReference,
@@ -209,11 +204,17 @@ export function toNotificationView(notification: NotificationEntity): Notificati
   return {
     id: notification.id,
     ...("user" in notification
-      ? { utilisateur: toUserEntityView(notification.user) }
+      ? {
+          utilisateur:
+            notification.user === undefined || notification.user === null
+              ? undefined
+              : toUserEntityView(notification.user),
+        }
       : {}),
     ...("obligation" in notification
       ? {
           obligation:
+            notification.obligation === undefined ||
             notification.obligation === null
               ? null
               : toObligationEntityView(notification.obligation),
@@ -222,6 +223,7 @@ export function toNotificationView(notification: NotificationEntity): Notificati
     ...("createdBy" in notification
       ? {
           creePar:
+            notification.createdBy === undefined ||
             notification.createdBy === null
               ? null
               : toUserEntityView(notification.createdBy),

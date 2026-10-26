@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import {
   BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -20,7 +22,9 @@ import {
 } from "../database/enums";
 import { SRE_REGION } from "../database/region";
 import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
+import { AcknowledgmentService } from "../notifications/acknowledgment.service";
 import { ActivationService } from "../notifications/activation.service";
+import { AdminNotificationService } from "../notifications/admin-notification.service";
 import { isValidEmail } from "../notifications/mail.service";
 import { CreateTaxpayerDto } from "./dto/create-taxpayer.dto";
 import { UpdateTaxpayerProfileDto } from "./dto/update-taxpayer-profile.dto";
@@ -47,6 +51,10 @@ export class TaxpayersService {
     private readonly dataSource: DataSource,
     private readonly configuration: ConfigService,
     private readonly activation: ActivationService,
+    @Optional()
+    private readonly adminNotifications?: AdminNotificationService,
+    @Optional()
+    private readonly acknowledgments?: AcknowledgmentService,
   ) {}
 
   async getMyProfile(user: AuthenticatedUser) {
@@ -87,14 +95,79 @@ export class TaxpayersService {
         "Le nom commercial ne concerne que les profils entreprise.",
       );
     }
-    if (data.adresse !== undefined)
+
+    const changedFields: string[] = [];
+    if (data.adresse !== undefined && data.adresse.trim() !== taxpayer.address) {
       taxpayer.address = data.adresse.trim();
-    if (data.ville !== undefined) taxpayer.city = data.ville.trim();
-    if (data.telephone !== undefined)
+      changedFields.push("Adresse");
+    }
+    if (data.ville !== undefined && data.ville.trim() !== taxpayer.city) {
+      taxpayer.city = data.ville.trim();
+      changedFields.push("Ville");
+    }
+    if (data.telephone !== undefined && data.telephone.trim() !== taxpayer.phone) {
       taxpayer.phone = data.telephone.trim();
-    if (data.nomCommercial !== undefined)
-      taxpayer.tradeName = data.nomCommercial.trim() || null;
-    return this.toTaxpayerView(await this.taxpayers.save(taxpayer));
+      changedFields.push("Téléphone");
+    }
+    if (data.nomCommercial !== undefined) {
+      const nextTrade = data.nomCommercial.trim() || null;
+      if (nextTrade !== (taxpayer.tradeName ?? null)) {
+        taxpayer.tradeName = nextTrade;
+        changedFields.push("Nom commercial");
+      }
+    }
+
+    const saved = await this.taxpayers.save(taxpayer);
+
+    if (changedFields.length > 0) {
+      const displayName =
+        saved.legalName?.trim() ||
+        [saved.lastName, saved.firstName].filter(Boolean).join(" ").trim() ||
+        user.name;
+      const fingerprint = createHash("sha256")
+        .update(
+          `${saved.address}|${saved.city}|${saved.phone}|${saved.tradeName ?? ""}`,
+        )
+        .digest("hex")
+        .slice(0, 16);
+      const summaryRows = [
+        { label: "Contribuable", value: displayName },
+        ...(saved.nif ? [{ label: "NIF", value: saved.nif }] : []),
+        { label: "Champs modifiés", value: changedFields.join(", ") },
+        { label: "Adresse", value: saved.address },
+        { label: "Ville", value: saved.city },
+        { label: "Téléphone", value: saved.phone },
+      ];
+
+      if (this.adminNotifications) {
+        await this.adminNotifications.notifyClientProfileUpdated({
+          userId: user.id,
+          taxpayerId: saved.id,
+          name: displayName,
+          email: saved.email || user.email,
+          taxpayerType: saved.type,
+          nif: saved.nif,
+          actionLabel: "Mise à jour des coordonnées contribuables",
+          summaryRows,
+          idempotencyToken: `UPD_${fingerprint}`,
+        });
+      }
+
+      if (this.acknowledgments) {
+        await this.acknowledgments.sendProfileUpdateAcknowledgment({
+          userId: user.id,
+          taxpayerId: saved.id,
+          recipientName: displayName,
+          recipientEmail: saved.email || user.email,
+          nif: saved.nif,
+          actionLabel: "Mise à jour de vos coordonnées contribuables",
+          summaryRows,
+          idempotencyToken: `UPD_${fingerprint}`,
+        });
+      }
+    }
+
+    return this.toTaxpayerView(saved);
   }
 
   async list(search = "", page = 1, perPage = 25) {
@@ -177,27 +250,14 @@ export class TaxpayersService {
     return this.toTaxpayerView(await this.taxpayers.save(profile));
   }
 
-  /**
-   * Excel import (data read and pre-validated client-side, validated then
-   * stored here):
-   * - each row gets a detailed status (account created, profile created, duplicate,
-   *   rejected with its errors);
-   * - each valid business (legal name + e-mail + STAT) gets a
-   *   distinct account linked to its profile, with the STAT number as hashed
-   *   provisional password (never stored in plain text);
-   * - an activation e-mail (single-use link + provisional credentials)
-   *   is triggered for every created account, with delivery tracking and retry;
-   * - idempotency: importing the same file again creates no duplicate
-   *   account or profile (duplicates reported row by row).
-   */
+  /** Excel import (data read and pre-validated client-side, validated then stored here). */
   async importTaxpayers(profiles: CreateTaxpayerDto[]) {
     if (!profiles.length)
       throw new BadRequestException(
         "Aucun profil à importer n'a été transmis.",
       );
 
-    // Hashing of provisional passwords in parallel BEFORE the transaction
-    // (bcrypt is expensive: keep the transaction short).
+    // Hashing of provisional passwords in parallel BEFORE the transaction.
     const rounds = Number(this.configuration.get<string>("BCRYPT_ROUNDS", "12"));
     const rowTypes = profiles.map((data) => {
       const email = data.courriel?.trim().toLowerCase() ?? "";
@@ -341,8 +401,7 @@ export class TaxpayersService {
           if (stat) stats.add(stat);
 
           if (entry.isBusinessWithAccount && stat && hashes[index]) {
-            // Distinct account: STAT = provisional password (hashed),
-            // mandatory initial setup before any business access.
+            // Distinct account.
             const user = await usersRepository.save(
               usersRepository.create({
                 name: label.slice(0, 160),
@@ -394,8 +453,7 @@ export class TaxpayersService {
       },
     );
 
-    // 4. First-sign-in e-mails, outside the transaction: a delivery failure
-    // does not cancel account creation (tracked status + retry by the admin).
+    // 4. First-sign-in e-mails, outside the transaction.
     const emails = [];
     for (const entry of result.comptes) {
       try {
@@ -441,9 +499,7 @@ export class TaxpayersService {
   async remove(id: string) {
     return this.dataSource.transaction(async (manager) => {
       const taxpayersRepository = manager.getRepository(TaxpayerEntity);
-      // PostgreSQL forbids FOR UPDATE on the nullable side of a join
-      // outer join: lock the taxpayer row alone first, then
-      // load the (optional) user relation outside the lock.
+      // PostgreSQL forbids FOR UPDATE on the nullable side of a join outer join: lock the taxpayer row alone first, then.
       const lock = await taxpayersRepository.findOne({
         where: { id, region: SRE_REGION },
         lock: { mode: "pessimistic_write" },

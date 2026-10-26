@@ -3,10 +3,7 @@ import { Type } from "class-transformer";
 import { IsString, Length, Matches, ValidateNested } from "class-validator";
 import { UpdateTaxpayerProfileDto } from "../../taxpayers/dto/update-taxpayer-profile.dto";
 
-/**
- * Confirmation of a single-use activation link: direct setting of the
- * personal password (without entering the provisional password).
- */
+/** Confirmation of a single-use activation link: direct setting of the personal password (without entering the prov. */
 export class ActivationConfirmationDto {
   @ApiProperty({
     description: "Jeton d'activation reçu par courriel (à usage unique).",

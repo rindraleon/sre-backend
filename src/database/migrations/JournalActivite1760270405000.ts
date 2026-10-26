@@ -1,10 +1,6 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-/**
- * Journal d'activité (audit) :
- * - table des événements d'audit alimentée par l'intercepteur global ;
- * - traçabilité de l'auteur, de l'action, de la ressource et du résultat.
- */
+/** Journal d'activité (audit). */
 export class JournalActivite1760270405000 implements MigrationInterface {
   name = "JournalActivite1760270405000";
 

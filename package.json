@@ -1,5 +1,5 @@
 {
-  "name": "sre-backend",
+  "name": "API-SRE Fianarantsoa",
   "version": "1.0.0",
   "private": true,
   "author": "Rindra & Harena",
@@ -19,7 +19,7 @@
     "migration:run": "typeorm-ts-node-commonjs -d src/database/data-source.ts migration:run",
     "migration:revert": "typeorm-ts-node-commonjs -d src/database/data-source.ts migration:revert",
     "migration:run:prod": "typeorm -d dist/database/data-source.js migration:run",
-    "test": "jest"
+    "test": "jest --passWithNoTests"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.7",

@@ -21,11 +21,7 @@ import { civilDateInTimezone, daysUntilDeadline, DEFAULT_TIMEZONE } from "./dead
 /** History entry type of manual overdue-notification campaigns. */
 export const MANUAL_REMINDER_TYPE = "RETARD_MANUEL";
 
-/**
- * Situation of a record with regard to overdue — distinct tracking
- * categories: settled, under review (special handling), rejected,
- * correction requested, overdue or pending.
- */
+/** Situation of a record with regard to overdue. */
 export type OverdueSituation =
   | "REGULARISE"
   | "EN_VERIFICATION"
@@ -105,18 +101,7 @@ function entityName(taxpayer: {
   );
 }
 
-/**
- * Overdue tracking and bulk notification campaigns (administration).
- *
- * - The overdue list is computed from due dates and recorded
- *   statuses; settled records are excluded by default.
- * - A campaign creates one notification per recipient (in-app + e-mail if
- *   a transport is configured), renders the message from a shared template
- *   without ever mixing two entities' data, refuses same-day
- *   duplicates (idempotency key) and reports partial failures.
- * - The "DELIVRE" status is never set: no mail provider
- *   confirms delivery within the current scope.
- */
+/** Overdue tracking and bulk notification campaigns (administration). */
 @Injectable()
 export class CampaignService {
   private readonly activityLog = new Logger(CampaignService.name);
@@ -203,11 +188,7 @@ export class CampaignService {
       .sort((a, b) => b.joursRetard - a.joursRetard);
   }
 
-  /**
-   * Bulk send: each recipient gets their own rendering of the template.
-   * Settled records are excluded; same-day duplicates are
-   * reported without recreating a notification; failures are detailed.
-   */
+  /** Bulk send: each recipient gets their own rendering of the template. */
   async sendCampaign(
     administrator: UserEntity,
     obligationIds: string[],

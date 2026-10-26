@@ -6,11 +6,7 @@ import {
   PrimaryGeneratedColumn,
 } from "typeorm";
 
-/**
- * Activity log (audit): one row per business action performed by an
- * authenticated account. Fed by the global `ActivityLogInterceptor`,
- * never by controllers — auditing must not be forgettable.
- */
+/** Activity log (audit): one row per business action performed by an authenticated account. */
 @Entity({ name: "journaux_activite" })
 @Index("idx_journaux_activite_cree_le", ["createdAt"])
 export class ActivityLogEntity {

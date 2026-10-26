@@ -20,12 +20,7 @@ export class LoginDto {
   })
   motDePasse!: string;
 
-  /**
-   * @deprecated Kept for compatibility with existing clients, but
-   * ignored: authentication is based on the e-mail address and the
-   * password only. The STAT number only serves as a provisional password
-   * at first sign-in (entered in `motDePasse`).
-   */
+  /** @deprecated Kept for compatibility with existing clients, but ignored: authentication is based on the e-mail add. */
   @ApiPropertyOptional({
     deprecated: true,
     description:

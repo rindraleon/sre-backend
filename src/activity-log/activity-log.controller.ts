@@ -6,10 +6,7 @@ import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { ActivityLogService } from "./activity-log.service";
 
-/**
- * Administration: activity log (audit of business actions).
- * Rows are produced by the global `ActivityLogInterceptor`.
- */
+/** Administration: activity log (audit of business actions). */
 @ApiTags("Administration — journal d’activité")
 @ApiBearerAuth()
 @Controller("admin")

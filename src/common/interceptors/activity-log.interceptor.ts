@@ -56,11 +56,7 @@ const ACTION_LABELS: Record<string, string> = {
   "PATCH /notifications/:id": "Notification mise à jour",
 };
 
-/**
- * Global audit interceptor: logs every business action performed by an
- * authenticated account (success and failure alike). The write is detached
- * and best-effort: the log must never make a request fail.
- */
+/** Global audit interceptor: logs every business action performed by an authenticated account (success and failure. */
 @Injectable()
 export class ActivityLogInterceptor implements NestInterceptor {
   constructor(

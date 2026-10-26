@@ -21,11 +21,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { UserEntity } from "../database/entities/user.entity";
 
-/**
- * Administration: overdue tracking and bulk notification campaigns.
- * Restricted to administrator accounts; every operation is validated
- * server-side and traced (author, recipients, delivery statuses).
- */
+/** Administration: overdue tracking and bulk notification campaigns. */
 @ApiTags("Administration — retards et notifications")
 @ApiBearerAuth()
 @Controller("admin")

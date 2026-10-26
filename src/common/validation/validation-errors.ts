@@ -1,11 +1,7 @@
 import { BadRequestException } from "@nestjs/common";
 import type { ValidationError } from "class-validator";
 
-/**
- * Flattens class-validator errors (including nested objects,
- * e.g. `profil.telephone`) into a dictionary keyed by field name.
- * Messages come from the DTO decorators (in French).
- */
+/** Flattens class-validator errors (including nested objects, e.g. */
 export function buildFieldErrors(
   errors: ValidationError[],
   prefix = "",

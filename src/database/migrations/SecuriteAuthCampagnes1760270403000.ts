@@ -1,13 +1,6 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-/**
- * Renforcement de l'authentification et campagnes de notification :
- * - journal des tentatives de connexion ;
- * - vérification de l'adresse e-mail par code à usage unique ;
- * - traçabilité de l'administrateur à l'origine d'une notification manuelle ;
- * - état « DELIVRE » distinct de « ENVOYE » (jamais posé sans confirmation du
- *   fournisseur de messagerie).
- */
+/** Renforcement de l'authentification et campagnes de notification. */
 export class SecuriteAuthCampagnes1760270403000
   implements MigrationInterface
 {

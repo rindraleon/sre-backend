@@ -1,10 +1,6 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-/**
- * Messages du formulaire public « Contact ». Le portail conserve chaque
- * message (source de vérité) ; le courriel aux administrateurs est une
- * notification.best-effort par-dessus.
- */
+/** Messages du formulaire public « Contact ». */
 export class MessagesContact1760270406000 implements MigrationInterface {
   name = "MessagesContact1760270406000";
 

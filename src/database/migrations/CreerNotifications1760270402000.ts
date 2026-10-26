@@ -1,10 +1,6 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-/**
- * Centre de notifications in-app + suivi d'envoi des courriels de rappel
- * d'échéance. La clé d'idempotence unique (utilisateur+obligation+type de
- * rappel) garantit l'absence de doublons entre exécutions du job.
- */
+/** Centre de notifications in-app + suivi d'envoi des courriels de rappel d'échéance. */
 export class CreerNotifications1760270402000 implements MigrationInterface {
   name = "CreerNotifications1760270402000";
 

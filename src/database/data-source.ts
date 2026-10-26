@@ -19,6 +19,7 @@ import { SecuriteAuthCampagnes1760270403000 } from "./migrations/SecuriteAuthCam
 import { PremiereConnexionEntreprises1760270404000 } from "./migrations/PremiereConnexionEntreprises1760270404000";
 import { JournalActivite1760270405000 } from "./migrations/JournalActivite1760270405000";
 import { MessagesContact1760270406000 } from "./migrations/MessagesContact1760270406000";
+import { AmeliorationMessagerieNotifications1760270407000 } from "./migrations/AmeliorationMessagerieNotifications1760270407000";
 
 const databasePassword = process.env.DB_PASSWORD?.trim();
 if (!databasePassword)
@@ -57,6 +58,7 @@ const sreDataSource = new DataSource({
     PremiereConnexionEntreprises1760270404000,
     JournalActivite1760270405000,
     MessagesContact1760270406000,
+    AmeliorationMessagerieNotifications1760270407000,
   ],
   migrationsTableName: "migrations_sre",
 });

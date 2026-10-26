@@ -16,11 +16,7 @@ export interface ActivityLogRow {
   details?: string;
 }
 
-/**
- * Reads the activity log (audit) fed by the global interceptor.
- * Administration only: rows are returned from the most recent
- * to the oldest.
- */
+/** Reads the activity log (audit) fed by the global interceptor. */
 @Injectable()
 export class ActivityLogService {
   constructor(

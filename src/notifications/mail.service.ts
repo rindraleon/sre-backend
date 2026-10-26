@@ -54,13 +54,7 @@ export function buildEmailHtml(settings: {
 </body></html>`;
 }
 
-/**
- * Sends e-mails according to `MAIL_TRANSPORT`:
- * - `smtp`: real SMTP via nodemailer (SMTP_HOST/PORT/USER/PASSWORD/FROM variables);
- * - `capture`: in-memory capture box (tests/development, no real send);
- * - other/absent: not configured -> explicit error, never a fake successful send.
- * No secret is ever logged.
- */
+/** Sends e-mails according to `MAIL_TRANSPORT`. */
 @Injectable()
 export class MailService implements MailSender {
   private readonly activityLog = new Logger(MailService.name);

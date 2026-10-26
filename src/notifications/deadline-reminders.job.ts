@@ -6,14 +6,7 @@ import {
   DeadlineReminderService,
 } from "./deadline-reminders.service";
 
-/**
- * Scheduled deadline-reminder job: once a day at 06:00 in the
- * business time zone (Indian/Antananarivo by default, `FUSEAU_HORAIRE`).
- * - Can be toggled with `RAPPELS_ACTIFS=false` (disabled in tests).
- * - No GET or page load ever triggers a send.
- * - Re-runnable without duplicates: unique idempotency key in the database, so two
- *   concurrent instances do not create two notifications.
- */
+/** Scheduled deadline-reminder job: once a day at 06:00 in the business time zone (Indian/Antananarivo by default. */
 @Injectable()
 export class DeadlineReminderJob {
   private readonly activityLog = new Logger(DeadlineReminderJob.name);

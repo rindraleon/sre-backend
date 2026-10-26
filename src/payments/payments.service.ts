@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
@@ -21,6 +22,8 @@ import {
 } from "../database/enums";
 import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
 import { DocumentsService } from "../documents/documents.service";
+import { AcknowledgmentService } from "../notifications/acknowledgment.service";
+import { AdminNotificationService } from "../notifications/admin-notification.service";
 import { CreatePaymentDto } from "./dto/create-payment.dto";
 import { PaymentDecisionDto } from "./dto/payment-decision.dto";
 
@@ -31,128 +34,185 @@ export class PaymentsService {
     private readonly payments: Repository<PaymentEntity>,
     private readonly dataSource: DataSource,
     private readonly documents: DocumentsService,
+    @Optional()
+    private readonly adminNotifications?: AdminNotificationService,
+    @Optional()
+    private readonly acknowledgments?: AcknowledgmentService,
   ) {}
 
-  async createDeclaration(
-    user: AuthenticatedUser,
-    data: CreatePaymentDto,
-  ) {
-    if (
-      user.role !== AccountRole.CLIENT ||
-      !user.taxpayerId
-    ) {
+  async createDeclaration(user: AuthenticatedUser, data: CreatePaymentDto) {
+    if (user.role !== AccountRole.CLIENT || !user.taxpayerId) {
       throw new ForbiddenException(
         "Un compte client lié à un contribuable est nécessaire.",
       );
     }
 
-    const paymentId = await this.dataSource.transaction(
-      async (manager) => {
-        const obligationsRepository = manager.getRepository(ObligationEntity);
-        const obligation = await obligationsRepository
-          .createQueryBuilder("obligation")
-          .leftJoinAndSelect("obligation.taxpayer", "taxpayer")
-          .leftJoinAndSelect("obligation.taxType", "taxType")
-          .where("obligation.id = :obligationId", {
-            obligationId: data.obligationId,
-          })
-          .andWhere("taxpayer.id = :taxpayerId", {
-            taxpayerId: user.taxpayerId,
-          })
-          .setLock("pessimistic_write", undefined, ["obligation"])
-          .getOne();
+    const {
+      paymentId,
+      internalReference,
+      acknowledgmentNumber,
+      obligationSnapshot,
+      submittedAt,
+    } = await this.dataSource.transaction(async (manager) => {
+      const obligationsRepository = manager.getRepository(ObligationEntity);
+      const obligation = await obligationsRepository
+        .createQueryBuilder("obligation")
+        .leftJoinAndSelect("obligation.taxpayer", "taxpayer")
+        .leftJoinAndSelect("obligation.taxType", "taxType")
+        .where("obligation.id = :obligationId", {
+          obligationId: data.obligationId,
+        })
+        .andWhere("taxpayer.id = :taxpayerId", {
+          taxpayerId: user.taxpayerId,
+        })
+        .setLock("pessimistic_write", undefined, ["obligation"])
+        .getOne();
 
-        if (!obligation)
-          throw new NotFoundException("Obligation introuvable pour ce compte.");
-        const eligibleStatuses = [
-          ObligationStatus.TO_PAY,
-          ObligationStatus.OVERDUE,
-          ObligationStatus.REJECTED,
-          ObligationStatus.CORRECTION_REQUESTED,
-        ];
-        if (!eligibleStatuses.includes(obligation.status)) {
-          throw new ConflictException(
-            "Cette obligation possède déjà une déclaration en cours ou est réglée.",
-          );
-        }
-        if (
-          data.mode === PaymentMethod.MOBILE_MONEY &&
-          (!data.operateur || !data.telephoneUtilise)
-        ) {
-          throw new BadRequestException(
-            "L'opérateur et le numéro sont requis pour une déclaration mobile-money.",
-          );
-        }
-        if (
-          data.mode === PaymentMethod.BANK_TRANSFER &&
-          !data.banqueOuCanal?.trim()
-        ) {
-          throw new BadRequestException(
-            "Le canal déclaré est requis pour une déclaration de virement.",
-          );
-        }
+      if (!obligation)
+        throw new NotFoundException("Obligation introuvable pour ce compte.");
+      const eligibleStatuses = [
+        ObligationStatus.TO_PAY,
+        ObligationStatus.OVERDUE,
+        ObligationStatus.REJECTED,
+        ObligationStatus.CORRECTION_REQUESTED,
+      ];
+      if (!eligibleStatuses.includes(obligation.status)) {
+        throw new ConflictException(
+          "Cette obligation possède déjà une déclaration en cours ou est réglée.",
+        );
+      }
+      if (
+        data.mode === PaymentMethod.MOBILE_MONEY &&
+        (!data.operateur || !data.telephoneUtilise)
+      ) {
+        throw new BadRequestException(
+          "L'opérateur et le numéro sont requis pour une déclaration mobile-money.",
+        );
+      }
+      if (
+        data.mode === PaymentMethod.BANK_TRANSFER &&
+        !data.banqueOuCanal?.trim()
+      ) {
+        throw new BadRequestException(
+          "Le canal déclaré est requis pour une déclaration de virement.",
+        );
+      }
 
-        const referenceUnique = randomUUID()
-          .replaceAll("-", "")
-          .slice(0, 12)
-          .toUpperCase();
-        const internalReference = `PAY-${new Date().getFullYear()}-${referenceUnique}`;
-        const paymentsRepository = manager.getRepository(PaymentEntity);
-        const payment = paymentsRepository.create({
-          internalReference,
-          taxpayer: obligation.taxpayer,
-          obligation,
-          amount: obligation.amount,
-          currency: "MGA",
-          mode: data.mode,
-          operator:
-            data.mode === PaymentMethod.MOBILE_MONEY
-              ? (data.operateur ?? null)
-              : null,
-          usedPhone:
-            data.mode === PaymentMethod.MOBILE_MONEY
-              ? (data.telephoneUtilise?.trim() ?? null)
-              : null,
-          bankOrChannel:
-            data.mode === PaymentMethod.BANK_TRANSFER
-              ? (data.banqueOuCanal?.trim() ?? null)
-              : null,
-          payerName: data.titulairePayeur?.trim() || null,
-          transactionReference: data.referenceTransaction.trim(),
-          transactionDate: data.dateTransaction.slice(0, 10),
-          supportingDocumentName: this.sanitizeSupportingDocumentName(
-            data.justificatifNom,
-          ),
-          status: PaymentStatus.UNDER_REVIEW,
-          validatedAt: null,
-          validatedBy: null,
-          decisionReason: null,
-        });
-        const savedPayment = await paymentsRepository.save(payment);
+      const referenceUnique = randomUUID()
+        .replaceAll("-", "")
+        .slice(0, 12)
+        .toUpperCase();
+      const internalRef = `PAY-${new Date().getFullYear()}-${referenceUnique}`;
+      const paymentsRepository = manager.getRepository(PaymentEntity);
+      const payment = paymentsRepository.create({
+        internalReference: internalRef,
+        taxpayer: obligation.taxpayer,
+        obligation,
+        amount: obligation.amount,
+        currency: "MGA",
+        mode: data.mode,
+        operator:
+          data.mode === PaymentMethod.MOBILE_MONEY
+            ? (data.operateur ?? null)
+            : null,
+        usedPhone:
+          data.mode === PaymentMethod.MOBILE_MONEY
+            ? (data.telephoneUtilise?.trim() ?? null)
+            : null,
+        bankOrChannel:
+          data.mode === PaymentMethod.BANK_TRANSFER
+            ? (data.banqueOuCanal?.trim() ?? null)
+            : null,
+        payerName: data.titulairePayeur?.trim() || null,
+        transactionReference: data.referenceTransaction.trim(),
+        transactionDate: data.dateTransaction.slice(0, 10),
+        supportingDocumentName: this.sanitizeSupportingDocumentName(
+          data.justificatifNom,
+        ),
+        status: PaymentStatus.UNDER_REVIEW,
+        validatedAt: null,
+        validatedBy: null,
+        decisionReason: null,
+      });
+      const savedPayment = await paymentsRepository.save(payment);
 
-        obligation.status = ObligationStatus.UNDER_REVIEW;
-        await obligationsRepository.save(obligation);
+      obligation.status = ObligationStatus.UNDER_REVIEW;
+      await obligationsRepository.save(obligation);
 
-        const paymentEventsRepository = manager.getRepository(PaymentEventEntity);
-        const event = paymentEventsRepository.create({
-          payment: savedPayment,
-          status: PaymentStatus.UNDER_REVIEW,
-          label: "Déclaration soumise — paiement non vérifié",
-          actor: manager
-            .getRepository(UserEntity)
-            .create({ id: user.id }),
-          actorName: user.name,
-          reason: null,
-        });
-        await paymentEventsRepository.save(event);
-        await this.documents.createAcknowledgment(manager, {
-          ...savedPayment,
-          taxpayer: obligation.taxpayer,
-          obligation,
-        });
-        return savedPayment.id;
-      },
-    );
+      const paymentEventsRepository = manager.getRepository(PaymentEventEntity);
+      const event = paymentEventsRepository.create({
+        payment: savedPayment,
+        status: PaymentStatus.UNDER_REVIEW,
+        label: "Déclaration soumise — paiement non vérifié",
+        actor: manager.getRepository(UserEntity).create({ id: user.id }),
+        actorName: user.name,
+        reason: null,
+      });
+      await paymentEventsRepository.save(event);
+      const ackDoc = await this.documents.createAcknowledgment(manager, {
+        ...savedPayment,
+        taxpayer: obligation.taxpayer,
+        obligation,
+      });
+      return {
+        paymentId: savedPayment.id,
+        internalReference: savedPayment.internalReference,
+        acknowledgmentNumber: ackDoc?.number ?? null,
+        obligationSnapshot: obligation,
+        submittedAt: savedPayment.submittedAt ?? new Date(),
+      };
+    });
+
+    // Post-commit notifications (never block or rollback the persisted declaration).
+    const taxpayer = obligationSnapshot.taxpayer;
+    const taxpayerName =
+      taxpayer?.legalName?.trim() ||
+      [taxpayer?.lastName, taxpayer?.firstName]
+        .filter(Boolean)
+        .join(" ")
+        .trim() ||
+      user.name;
+    const taxpayerEmail = taxpayer?.email || user.email;
+    const taxTypeName = obligationSnapshot.taxType?.name ?? "Impôt / Taxe";
+
+    if (this.adminNotifications) {
+      await this.adminNotifications.notifyPaymentDeclarationSubmitted({
+        paymentId,
+        internalReference,
+        obligation: obligationSnapshot,
+        taxpayerName,
+        taxpayerEmail,
+        taxpayerNif: taxpayer?.nif ?? null,
+        taxReference: obligationSnapshot.taxReference,
+        taxTypeName,
+        period: obligationSnapshot.period,
+        amount: obligationSnapshot.amount,
+        currency: "MGA",
+        mode: data.mode,
+        transactionReference: data.referenceTransaction.trim(),
+        submittedAt,
+      });
+    }
+
+    if (this.acknowledgments) {
+      await this.acknowledgments.sendPaymentDeclarationAcknowledgment({
+        userId: user.id,
+        paymentId,
+        internalReference,
+        acknowledgmentNumber,
+        obligation: obligationSnapshot,
+        taxReference: obligationSnapshot.taxReference,
+        taxTypeName,
+        period: obligationSnapshot.period,
+        amount: obligationSnapshot.amount,
+        currency: "MGA",
+        mode: data.mode,
+        transactionReference: data.referenceTransaction.trim(),
+        submittedAt,
+        recipientName: taxpayerName,
+        recipientEmail: taxpayerEmail,
+      });
+    }
 
     return this.getOne(paymentId, user);
   }
@@ -169,11 +229,7 @@ export class PaymentsService {
     return rows.map((payment) => this.toPaymentView(payment));
   }
 
-  async listForAdministration(
-    status?: PaymentStatus,
-    page = 1,
-    perPage = 25,
-  ) {
+  async listForAdministration(status?: PaymentStatus, page = 1, perPage = 25) {
     const pageNumber = Math.max(1, Math.floor(page) || 1);
     const pageSize = Math.min(100, Math.max(1, Math.floor(perPage) || 25));
     const request = this.buildQuery()
@@ -208,11 +264,7 @@ export class PaymentsService {
     return this.toPaymentView(payment);
   }
 
-  async decide(
-    id: string,
-    user: AuthenticatedUser,
-    data: PaymentDecisionDto,
-  ) {
+  async decide(id: string, user: AuthenticatedUser, data: PaymentDecisionDto) {
     if (user.role !== AccountRole.ADMIN)
       throw new ForbiddenException("Décision réservée à l'administration.");
     const status = data.statut;
@@ -234,84 +286,134 @@ export class PaymentsService {
       );
     }
 
-    await this.dataSource.transaction(async (manager) => {
-      const paymentsRepository = manager.getRepository(PaymentEntity);
-      const lock = await paymentsRepository
-        .createQueryBuilder("payment")
-        .where("payment.id = :paymentId", { paymentId: id })
-        .setLock("pessimistic_write")
-        .getOne();
-      if (!lock) throw new NotFoundException("Déclaration introuvable.");
-      if (lock.status !== PaymentStatus.UNDER_REVIEW) {
-        throw new ConflictException(
-          "Une décision a déjà été enregistrée pour cette déclaration.",
-        );
-      }
+    const decisionSnapshot = await this.dataSource.transaction(
+      async (manager) => {
+        const paymentsRepository = manager.getRepository(PaymentEntity);
+        const lock = await paymentsRepository
+          .createQueryBuilder("payment")
+          .where("payment.id = :paymentId", { paymentId: id })
+          .setLock("pessimistic_write")
+          .getOne();
+        if (!lock) throw new NotFoundException("Déclaration introuvable.");
+        if (lock.status !== PaymentStatus.UNDER_REVIEW) {
+          throw new ConflictException(
+            "Une décision a déjà été enregistrée pour cette déclaration.",
+          );
+        }
 
-      const payment = await paymentsRepository.findOne({
-        where: { id, taxpayer: { region: SRE_REGION } },
-        relations: { taxpayer: true, obligation: { taxType: true } },
-      });
-      if (!payment)
-        throw new NotFoundException(
-          "Déclaration introuvable dans le périmètre du service.",
-        );
-      const obligationsRepository = manager.getRepository(ObligationEntity);
-      const obligation = await obligationsRepository
-        .createQueryBuilder("obligation")
-        .where("obligation.id = :obligationId", {
-          obligationId: payment.obligation.id,
-        })
-        .setLock("pessimistic_write")
-        .getOne();
-      if (!obligation)
-        throw new NotFoundException("Obligation liée introuvable.");
+        const payment = await paymentsRepository.findOne({
+          where: { id, taxpayer: { region: SRE_REGION } },
+          relations: { taxpayer: true, obligation: { taxType: true } },
+        });
+        if (!payment)
+          throw new NotFoundException(
+            "Déclaration introuvable dans le périmètre du service.",
+          );
+        const obligationsRepository = manager.getRepository(ObligationEntity);
+        const obligation = await obligationsRepository
+          .createQueryBuilder("obligation")
+          .where("obligation.id = :obligationId", {
+            obligationId: payment.obligation.id,
+          })
+          .setLock("pessimistic_write")
+          .getOne();
+        if (!obligation)
+          throw new NotFoundException("Obligation liée introuvable.");
 
-      const administrator = manager
-        .getRepository(UserEntity)
-        .create({ id: user.id });
-      const dateDecision = new Date();
-      const reason = data.motif?.trim() || null;
-      payment.status = status;
-      payment.validatedAt =
-        status === PaymentStatus.CONFIRMED ? dateDecision : null;
-      payment.validatedBy = administrator;
-      payment.decisionReason = reason;
-      await paymentsRepository.save(payment);
+        const administrator = manager
+          .getRepository(UserEntity)
+          .create({ id: user.id });
+        const dateDecision = new Date();
+        const reason = data.motif?.trim() || null;
+        payment.status = status;
+        payment.validatedAt =
+          status === PaymentStatus.CONFIRMED ? dateDecision : null;
+        payment.validatedBy = administrator;
+        payment.decisionReason = reason;
+        await paymentsRepository.save(payment);
 
-      obligation.status =
-        status === PaymentStatus.CONFIRMED
-          ? ObligationStatus.PAID
-          : status === PaymentStatus.REJECTED
-            ? ObligationStatus.REJECTED
-            : ObligationStatus.CORRECTION_REQUESTED;
-      await obligationsRepository.save(obligation);
+        obligation.status =
+          status === PaymentStatus.CONFIRMED
+            ? ObligationStatus.PAID
+            : status === PaymentStatus.REJECTED
+              ? ObligationStatus.REJECTED
+              : ObligationStatus.CORRECTION_REQUESTED;
+        await obligationsRepository.save(obligation);
 
-      const label =
-        status === PaymentStatus.CONFIRMED
-          ? "Déclaration confirmée par une décision administrative — hors vérification bancaire"
-          : status === PaymentStatus.REJECTED
-            ? "Déclaration rejetée"
-            : "Correction demandée";
-      const event = manager.getRepository(PaymentEventEntity).create({
-        payment,
-        status,
-        label,
-        actor: administrator,
-        actorName: user.name,
-        reason,
-        createdAt: dateDecision,
-      });
-      await manager.getRepository(PaymentEventEntity).save(event);
-
-      if (status === PaymentStatus.CONFIRMED) {
-        await this.documents.createInternalReceipt(
-          manager,
+        const label =
+          status === PaymentStatus.CONFIRMED
+            ? "Déclaration confirmée par une décision administrative — hors vérification bancaire"
+            : status === PaymentStatus.REJECTED
+              ? "Déclaration rejetée"
+              : "Correction demandée";
+        const event = manager.getRepository(PaymentEventEntity).create({
           payment,
-          administrator,
-        );
-      }
-    });
+          status,
+          label,
+          actor: administrator,
+          actorName: user.name,
+          reason,
+          createdAt: dateDecision,
+        });
+        await manager.getRepository(PaymentEventEntity).save(event);
+
+        if (status === PaymentStatus.CONFIRMED) {
+          await this.documents.createInternalReceipt(
+            manager,
+            payment,
+            administrator,
+          );
+        }
+
+        const clientUser = payment.taxpayer?.id
+          ? await manager.getRepository(UserEntity).findOne({
+              where: { taxpayer: { id: payment.taxpayer.id } },
+            })
+          : null;
+
+        return {
+          clientUserId: clientUser?.id ?? null,
+          clientEmail:
+            payment.taxpayer?.email || clientUser?.email || "",
+          clientName:
+            payment.taxpayer?.legalName?.trim() ||
+            [payment.taxpayer?.lastName, payment.taxpayer?.firstName]
+              .filter(Boolean)
+              .join(" ")
+              .trim() ||
+            clientUser?.name ||
+            "Contribuable",
+          internalReference: payment.internalReference,
+          obligation: payment.obligation,
+          taxReference: payment.obligation.taxReference,
+          taxTypeName: payment.obligation.taxType?.name ?? "Impôt / Taxe",
+          period: payment.obligation.period,
+          amount: payment.amount,
+          currency: payment.currency,
+          reason,
+          decidedAt: dateDecision,
+        };
+      },
+    );
+
+    if (this.acknowledgments && decisionSnapshot.clientUserId) {
+      await this.acknowledgments.sendPaymentDecisionNotification({
+        userId: decisionSnapshot.clientUserId,
+        paymentId: id,
+        internalReference: decisionSnapshot.internalReference,
+        obligation: decisionSnapshot.obligation,
+        taxReference: decisionSnapshot.taxReference,
+        taxTypeName: decisionSnapshot.taxTypeName,
+        period: decisionSnapshot.period,
+        amount: decisionSnapshot.amount,
+        currency: decisionSnapshot.currency,
+        status,
+        reason: decisionSnapshot.reason,
+        decidedAt: decisionSnapshot.decidedAt,
+        recipientName: decisionSnapshot.clientName,
+        recipientEmail: decisionSnapshot.clientEmail,
+      });
+    }
 
     return this.getOne(id, user);
   }

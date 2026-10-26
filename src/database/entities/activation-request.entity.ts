@@ -14,12 +14,7 @@ import {
 } from "../enums";
 import { UserEntity } from "./user.entity";
 
-/**
- * Activation / reset request: secure single-purpose token
- * (SHA-256 fingerprint, never stored in plain text) and e-mail delivery tracking.
- * Idempotency: a single active request (unused, unexpired) per
- * user and per type.
- */
+/** Activation / reset request: secure single-purpose token (SHA-256 fingerprint, never stored in plain text) and e-. */
 @Entity({ name: "demandes_activation" })
 @Index("uq_demandes_activation_jeton", ["tokenHash"], { unique: true })
 @Index("idx_demandes_activation_utilisateur", ["userId", "type"])

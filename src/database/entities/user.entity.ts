@@ -58,11 +58,7 @@ export class UserEntity {
   })
   mustChangePassword!: boolean;
 
-  /**
-   * Profile completed / verified by the user (initial setup).
-   * While `mustChangePassword` or `!isProfileComplete`, business routes
-   * stay blocked server-side (setup flow).
-   */
+  /** Profile completed / verified by the user (initial setup). */
   @Column({ name: "profil_complete", type: "boolean", default: true })
   isProfileComplete!: boolean;
 

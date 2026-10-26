@@ -4,11 +4,7 @@ import { Repository } from "typeorm";
 import { toNotificationView } from "../common/views/entity-views";
 import { NotificationEntity } from "../database/entities/notification.entity";
 
-/**
- * Notification center: each user only sees and modifies their
- * own notifications (systematic filtering by `utilisateur_id`, server-side
- * — never by an identifier provided by the client).
- */
+/** Notification center: each user only sees and modifies their own notifications (systematic filtering by `utilisat. */
 @Injectable()
 export class NotificationsService {
   constructor(

@@ -21,12 +21,7 @@ export enum NotificationEmailStatus {
   FAILED = "ECHEC",
 }
 
-/**
- * Persisted notification (in-app notification center).
- * Unique `idempotencyKey` = user + obligation + reminder type:
- * the reminder job can be re-run (or run twice concurrently) without
- * ever creating two notifications of the same type for the same obligation.
- */
+/** Persisted notification (in-app notification center & tracked e-mail notifications). */
 @Entity({ name: "notifications" })
 @Index("uq_notifications_cle_idempotence", ["idempotencyKey"], { unique: true })
 @Index("idx_notifications_utilisateur_lue", ["user", "isRead"])
@@ -42,31 +37,38 @@ export class NotificationEntity {
   @JoinColumn({ name: "obligation_id" })
   obligation!: ObligationEntity | null;
 
-  /** Administrator behind a manual notification (traceability). */
+  /** Administrator or actor behind a notification (traceability). */
   @ManyToOne(() => UserEntity, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "cree_par_id" })
   createdBy!: UserEntity | null;
 
-  /** Ex. AVANT_7, AVANT_3, AVANT_1, JOUR_J, RETARD_1, RETARD_3, RETARD_7. */
-  @Column({ name: "type_rappel", type: "varchar", length: 24 })
+  /** Ex. AVANT_7, JOUR_J, RETARD_1, CONTACT_PUBLIC, DECLARATION_PAIEMENT, ACCUSE_RECEPTION. */
+  @Column({ name: "type_rappel", type: "varchar", length: 48 })
   reminderType!: string;
 
   @Column({
-      name: "titre",
-    type: "varchar", length: 160 })
+    name: "titre",
+    type: "varchar",
+    length: 160,
+  })
   title!: string;
 
   @Column({ type: "text" })
   message!: string;
 
   @Column({
-      name: "lien",
-    type: "varchar", length: 200, nullable: true })
+    name: "lien",
+    type: "varchar",
+    length: 200,
+    nullable: true,
+  })
   link!: string | null;
 
   @Column({
-      name: "lue",
-    type: "boolean", default: false })
+    name: "lue",
+    type: "boolean",
+    default: false,
+  })
   isRead!: boolean;
 
   @Column({ name: "cle_idempotence", type: "varchar", length: 200 })
