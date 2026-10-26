@@ -58,23 +58,22 @@ const sharedOptions = {
 
 const databasePassword = process.env.DB_PASSWORD?.trim();
 
-let sreDataSource: DataSource;
-
-if (databaseUrl) {
-  sreDataSource = new DataSource({ ...sharedOptions, url: databaseUrl });
-} else if (databasePassword) {
-  sreDataSource = new DataSource({
-    ...sharedOptions,
-    host: process.env.DB_HOST ?? "localhost",
-    port: Number(process.env.DB_PORT ?? 5432),
-    username: process.env.DB_USERNAME ?? "sre_app",
-    password: databasePassword,
-    database: process.env.DB_DATABASE ?? "sre_demo",
-  });
-} else {
-  throw new Error(
-    "DB_PASSWORD ou DATABASE_URL doit être renseigné avant d’exécuter les migrations.",
-  );
-}
+const sreDataSource = databaseUrl
+  ? new DataSource({ ...sharedOptions, url: databaseUrl })
+  : databasePassword
+    ? new DataSource({
+        ...sharedOptions,
+        host: process.env.DB_HOST ?? "localhost",
+        port: Number(process.env.DB_PORT ?? 5432),
+        username: process.env.DB_USERNAME ?? "sre_app",
+        password: databasePassword,
+        database: process.env.DB_DATABASE ?? "sre_demo",
+      })
+    : (() => {
+        throw new Error(
+          "DB_PASSWORD ou DATABASE_URL doit être renseigné avant d’exécuter les migrations.",
+        );
+      })();
 
 export default sreDataSource;
+
