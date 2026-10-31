@@ -1,4 +1,4 @@
-import { ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
   IsEmail,
@@ -51,14 +51,14 @@ export class RegistrationProfileDto {
   @ApiPropertyOptional()
   nomCommercial?: string;
 
-  @IsOptional()
   @IsString({ message: "Ce champ doit être une chaîne de caractères." })
   @Length(3, 40, {
     message:
       "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
   })
-  @ApiPropertyOptional()
-  nif?: string;
+  @Matches(/\S/, { message: "Le NIF est obligatoire." })
+  @ApiProperty({ minLength: 3, maxLength: 40 })
+  nif!: string;
 
   @IsOptional()
   @IsString({ message: "Ce champ doit être une chaîne de caractères." })

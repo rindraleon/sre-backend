@@ -2,6 +2,12 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { createTransport, type Transporter } from "nodemailer";
 
+export interface OutgoingEmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
 export interface OutgoingEmail {
   recipient: string;
   recipientName?: string;
@@ -10,6 +16,7 @@ export interface OutgoingEmail {
   subject: string;
   text: string;
   html: string;
+  attachments?: OutgoingEmailAttachment[];
 }
 
 /** Injection token of the mail service (replaceable with a fake in tests). */
@@ -105,6 +112,9 @@ export class MailService implements MailSender {
         subject: email.subject,
         text: email.text,
         html: email.html,
+        ...(email.attachments?.length
+          ? { attachments: email.attachments }
+          : {}),
       });
       return;
     }

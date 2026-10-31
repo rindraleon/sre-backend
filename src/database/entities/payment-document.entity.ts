@@ -70,6 +70,15 @@ export class PaymentDocumentEntity {
   @Column({ name: "mention", type: "text" })
   mention!: string;
 
+  /** Code d'authentification imprimé sur le document (vérifiable par /documents/verifier). */
+  @Column({
+    name: "code_verification",
+    type: "varchar",
+    length: 32,
+    nullable: true,
+  })
+  verificationCode!: string | null;
+
   @Column({
       name: "instantane",
     type: "jsonb" })

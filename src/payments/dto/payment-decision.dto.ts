@@ -1,11 +1,23 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsEnum, IsString, Length, ValidateIf } from "class-validator";
+import { IsEnum, IsOptional, IsString, Length, ValidateIf } from "class-validator";
 import { PaymentStatus } from "../../database/enums";
 
 export class PaymentDecisionDto {
   @ApiProperty({ enum: PaymentStatus, description: "Statut administratif final ou demande de correction." })
   @IsEnum(PaymentStatus, { message: "La valeur sélectionnée est invalide." })
   statut!: PaymentStatus;
+
+  @ApiPropertyOptional({
+    maxLength: 128,
+    description:
+      "Référence du rapprochement (relevé bancaire, extrait mobile-money) lorsque la décision est une confirmation.",
+  })
+  @IsOptional()
+  @IsString({ message: "Ce champ doit être une chaîne de caractères." })
+  @Length(2, 128, {
+    message: "Ce champ doit contenir entre $constraint1 et $constraint2 caractères.",
+  })
+  referenceFournisseur?: string;
 
   @ApiPropertyOptional({
     minLength: 5,

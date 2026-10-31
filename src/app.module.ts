@@ -16,6 +16,7 @@ import { PaymentsModule } from "./payments/payments.module";
 import { TaxTypesModule } from "./tax-types/tax-types.module";
 import { UsersModule } from "./users/users.module";
 import { ActivityLogModule } from "./activity-log/activity-log.module";
+import { StatisticsModule } from "./statistics/statistics.module";
 
 @Module({
   imports: [
@@ -80,6 +81,7 @@ import { ActivityLogModule } from "./activity-log/activity-log.module";
     DocumentsModule,
     UsersModule,
     ActivityLogModule,
+    StatisticsModule,
     TypeOrmModule.forFeature([ActivityLogEntity]),
   ],
   controllers: [HealthController],

@@ -1,0 +1,251 @@
+name: CI
+
+# Intégration continue de l'API : compilation TypeScript, build NestJS, migrations réelles
+# sur PostgreSQL, démarrage de l'API et test de l'endpoint /sante, puis image Docker.
+# S'exécute sur chaque PR et sur les branches de déploiement (main = production, develop = staging).
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  qualite:
+    name: Qualité (types + build + format)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Installation des dépendances
+        run: npm ci
+
+      - name: Vérification des types
+        run: npx tsc --noEmit
+
+      - name: Build NestJS
+        run: npm run build
+
+      - name: Tests unitaires
+        # Aucun test pour l'instant : la commande ne doit pas faire échouer la CI.
+        # Retirer --passWithNoTests du script "test" dès le premier test ajouté.
+        run: npm test
+
+      - name: Format Prettier (avertissement)
+        continue-on-error: true
+        run: npx prettier --check "src/**/*.ts"
+
+      - name: Archive du build
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-dist-${{ github.sha }}
+          path: dist
+          retention-days: 7
+          if-no-files-found: error
+
+  migrations-et-sante:
+    name: Migrations PostgreSQL + /sante
+    runs-on: ubuntu-latest
+    needs: qualite
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sre_ci
+          POSTGRES_PASSWORD: sre_ci_mot_de_passe
+          POSTGRES_DB: sre_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sre_ci -d sre_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      PORT: 3000
+      DATABASE_URL: ""
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_USERNAME: sre_ci
+      DB_PASSWORD: sre_ci_mot_de_passe
+      DB_DATABASE: sre_ci
+      DB_SSL: "false"
+      DB_SYNCHRONIZE: "false"
+      DB_MIGRATIONS_RUN: "false"
+      JWT_SECRET: secret-de-ci-uniquement-non-utilise-en-production
+      JWT_EXPIRES_IN: 1h
+      CORS_ORIGINS: http://localhost:5173
+      RAPPELS_ACTIFS: "false"
+      MAIL_TRANSPORT: ""
+      APP_URL: http://localhost:5173
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Installation des dépendances
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Application des migrations
+        run: npm run migration:run
+
+      - name: Rejeu des migrations (doit être sans effet)
+        run: |
+          set -eu
+          sortie="$(npm run migration:run 2>&1)"
+          echo "$sortie"
+          if echo "$sortie" | grep -qi "has been executed"; then
+            echo "::error::Une migration a été rejouée : la révision des migrations n'est pas idempotente."
+            exit 1
+          fi
+
+      - name: Schéma créé
+        env:
+          PGPASSWORD: ${{ env.DB_PASSWORD }}
+        run: |
+          set -eu
+          sql() { psql -h 127.0.0.1 -U "$DB_USERNAME" -d "$DB_DATABASE" -tAc "$1"; }
+          tables="$(sql "select count(*) from information_schema.tables where table_schema='public'")"
+          echo "Tables publiques : ${tables}"
+          if [ "${tables}" -lt 10 ]; then
+            echo "::error::Le schéma semble incomplet (${tables} tables)."
+            exit 1
+          fi
+          echo "--- Migrations enregistrées ---"
+          sql "select id || ' | ' || timestamp || ' | ' || name from migrations_sre order by id"
+          if [ "$(sql "select to_regclass('public.migrations_sre') is not null")" != "t" ]; then
+            echo "::error::La table de suivi migrations_sre est absente."
+            exit 1
+          fi
+
+      - name: Démarrage de l'API et test de /sante
+        run: |
+          set -eu
+          node dist/main.js > api.log 2>&1 &
+          api_pid=$!
+          trap 'kill $api_pid 2>/dev/null || true' EXIT
+
+          code=""
+          for essai in $(seq 1 40); do
+            code="$(curl -s -o sante.json -w '%{http_code}' --max-time 5 http://127.0.0.1:3000/sante || true)"
+            if [ "$code" = "200" ]; then break; fi
+            sleep 3
+          done
+
+          echo "--- Réponse /sante (HTTP ${code}) ---"
+          cat sante.json 2>/dev/null || true
+          echo
+          if [ "$code" != "200" ]; then
+            echo "::error::L'API n'a pas répondu 200 sur /sante."
+            echo "--- Journal de l'API ---"
+            tail -n 80 api.log
+            exit 1
+          fi
+          grep -q '"statut":"ok"' sante.json || {
+            echo "::error::La base de données n'est pas annoncée connectée."
+            exit 1
+          }
+
+          # Un endpoint protégé doit refuser l'accès sans jeton.
+          code_protege="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+            http://127.0.0.1:3000/contribuables || true)"
+          echo "GET /contribuables sans jeton → HTTP ${code_protege}"
+          if [ "$code_protege" != "401" ]; then
+            echo "::error::Un endpoint protégé répond ${code_protege} sans jeton (attendu 401)."
+            exit 1
+          fi
+
+          {
+            echo "### Vérification d'intégration"
+            echo ""
+            echo "- Migrations appliquées puis rejouées sans effet"
+            echo "- \`GET /sante\` → 200, base connectée"
+            echo "- \`GET /contribuables\` sans jeton → 401"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Journal de l'API en cas d'échec
+        if: failure()
+        run: tail -n 120 api.log || true
+
+  image-docker:
+    name: Image Docker
+    runs-on: ubuntu-latest
+    needs: qualite
+    timeout-minutes: 20
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@v4
+
+      - name: Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Construction de l'image (sans publication en CI)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: sre-api:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Vérification de l'image
+        run: |
+          set -eu
+          docker run --rm --entrypoint node sre-api:ci-${{ github.sha }} -e "console.log(process.version)"
+          taille="$(docker image inspect sre-api:ci-${{ github.sha }} --format '{{.Size}}')"
+          echo "Taille de l'image : $((taille / 1024 / 1024)) Mo"
+          {
+            echo "### Image Docker"
+            echo ""
+            echo "- Image construite : \`sre-api:ci-${{ github.sha }}\`"
+            echo "- Taille : $((taille / 1024 / 1024)) Mo"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  securite:
+    name: Analyse sécurité
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Détection de secrets versionnés
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+      - name: Vulnérabilités des dépendances de production (avertissement)
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high

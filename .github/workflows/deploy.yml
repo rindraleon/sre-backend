@@ -1,0 +1,194 @@
+name: Déploiement
+
+# Déploiement continu de l'API sur Render, après un CI vert.
+#   • branche develop → service Render « staging »
+#   • branche main    → service Render « production » (environnement protégé + approbation)
+#
+# Le déploiement passe par un Deploy Hook Render (secret) ; si RENDER_API_KEY est fourni,
+# le workflow suit ensuite le déploiement dans l'API Render et fait échouer la CI/CD
+# si le service ne redémarre pas ou si /sante ne répond pas.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      environnement:
+        description: Environnement à déployer manuellement
+        type: choice
+        options: [staging, production]
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event.workflow_run.head_branch || inputs.environnement }}
+  cancel-in-progress: false
+
+jobs:
+  cible:
+    name: Résolution de la cible
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    outputs:
+      environnement: ${{ steps.calc.outputs.environnement }}
+      ref: ${{ steps.calc.outputs.ref }}
+      service_id: ${{ steps.calc.outputs.service_id }}
+      api_url: ${{ steps.calc.outputs.api_url }}
+    steps:
+      - name: Détermination de l'environnement
+        id: calc
+        env:
+          BRANCHE: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          ENTREE: ${{ inputs.environnement }}
+        run: |
+          set -eu
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            environnement="${ENTREE}"
+            if [ "${environnement}" = "production" ]; then ref="main"; else ref="develop"; fi
+            service_id="${{ vars.RENDER_SERVICE_ID_PRODUCTION }}"
+            api_url="${{ vars.API_URL_PRODUCTION }}"
+          else
+            ref="${SHA}"
+            if [ "${BRANCHE}" = "main" ]; then
+              environnement="production"
+              service_id="${{ vars.RENDER_SERVICE_ID_PRODUCTION }}"
+              api_url="${{ vars.API_URL_PRODUCTION }}"
+            else
+              environnement="staging"
+              service_id="${{ vars.RENDER_SERVICE_ID_STAGING }}"
+              api_url="${{ vars.API_URL_STAGING }}"
+            fi
+          fi
+
+          {
+            echo "environnement=${environnement}"
+            echo "ref=${ref}"
+            echo "service_id=${service_id}"
+            echo "api_url=${api_url}"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Cible de déploiement"
+            echo ""
+            echo "| Clé | Valeur |"
+            echo "| --- | --- |"
+            echo "| Environnement | \`${environnement}\` |"
+            echo "| Révision | \`${ref}\` |"
+            echo "| Service Render | \`${service_id:-non configuré}\` |"
+            echo "| API | \`${api_url}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  render:
+    name: Déploiement Render (${{ needs.cible.outputs.environnement }})
+    runs-on: ubuntu-latest
+    needs: cible
+    environment:
+      name: ${{ needs.cible.outputs.environnement }}
+      url: ${{ needs.cible.outputs.api_url }}
+    timeout-minutes: 25
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Déclenchement du Deploy Hook
+        env:
+          HOOK_PRODUCTION: ${{ secrets.RENDER_DEPLOY_HOOK_PRODUCTION }}
+          HOOK_STAGING: ${{ secrets.RENDER_DEPLOY_HOOK_STAGING }}
+          ENVIRONNEMENT: ${{ needs.cible.outputs.environnement }}
+        run: |
+          set -eu
+          if [ "${ENVIRONNEMENT}" = "production" ]; then hook="${HOOK_PRODUCTION}"; else hook="${HOOK_STAGING}"; fi
+          if [ -z "${hook}" ]; then
+            echo "::error::Le secret RENDER_DEPLOY_HOOK_$(echo "${ENVIRONNEMENT}" | tr '[:lower:]' '[:upper:]') est absent."
+            exit 1
+          fi
+          # Render renvoie {"deployId": "...", "deployStatusUrl": "..."}
+          reponse="$(curl -fsS -X POST "${hook}")"
+          echo "${reponse}"
+          echo "${reponse}" | node -e "
+            let data = '';
+            process.stdin.on('data', (chunk) => (data += chunk));
+            process.stdin.on('end', () => {
+              const parsed = JSON.parse(data);
+              console.log('deploy_id=' + (parsed.deployId ?? ''));
+            });
+          " >> "$GITHUB_OUTPUT"
+        id: hook
+
+      - name: Suivi du déploiement (si RENDER_API_KEY fourni)
+        if: env.RENDER_API_KEY != ''
+        env:
+          SERVICE_ID: ${{ needs.cible.outputs.service_id }}
+          DEPLOY_ID: ${{ steps.hook.outputs.deploy_id }}
+        run: |
+          set -eu
+          if [ -z "${SERVICE_ID}" ] || [ -z "${DEPLOY_ID}" ]; then
+            echo "::warning::RENDER_API_KEY fourni mais RENDER_SERVICE_ID_* ou deployId manquant ; suivi ignoré."
+            exit 0
+          fi
+          for essai in $(seq 1 60); do
+            etat="$(curl -fsS -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              "https://api.render.com/v1/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              | node -e "
+                let d='';process.stdin.on('data',c=>d+=c);
+                process.stdin.on('end',()=>console.log(JSON.parse(d).status ?? 'inconnu'));")"
+            echo "Essai ${essai}/60 : statut Render = ${etat}"
+            case "${etat}" in
+              live) echo "Déploiement actif."; exit 0 ;;
+              build_failed|canceled|deactivated|pre_deploy_failed)
+                echo "::error::Déploiement Render terminé en échec (${etat})."
+                exit 1 ;;
+            esac
+            sleep 15
+          done
+          echo "::error::Délai dépassé en attendant le déploiement Render."
+          exit 1
+
+  sante:
+    name: Vérification /sante après déploiement
+    runs-on: ubuntu-latest
+    needs: [cible, render]
+    if: needs.render.result == 'success'
+    timeout-minutes: 20
+    steps:
+      - name: API disponible
+        env:
+          API_URL: ${{ needs.cible.outputs.api_url }}
+          ENVIRONNEMENT: ${{ needs.cible.outputs.environnement }}
+        run: |
+          set -eu
+          if [ -z "${API_URL}" ]; then
+            echo "::warning::Aucune URL d'API configurée pour ${ENVIRONNEMENT} ; vérification ignorée."
+            exit 0
+          fi
+          base="${API_URL%/}"
+          code=""
+          for essai in $(seq 1 40); do
+            code="$(curl -s -o sante.json -w '%{http_code}' --max-time 15 "${base}/sante" || true)"
+            if [ "$code" = "200" ]; then break; fi
+            echo "Essai ${essai}/40 : HTTP ${code} — nouvelle tentative dans 15 s"
+            sleep 15
+          done
+          echo "--- ${base}/sante → HTTP ${code} ---"
+          cat sante.json 2>/dev/null || true
+          echo
+          if [ "$code" != "200" ]; then
+            echo "::error::L'API ${base} ne répond pas 200 sur /sante."
+            exit 1
+          fi
+          grep -q '"statut":"ok"' sante.json || {
+            echo "::error::L'API répond mais n'annonce pas la base connectée."
+            exit 1
+          }
+          {
+            echo "### Vérification après déploiement"
+            echo ""
+            echo "- \`${base}/sante\` → HTTP 200, base connectée"
+          } >> "$GITHUB_STEP_SUMMARY"

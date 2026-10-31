@@ -1,0 +1,70 @@
+# Blueprint Render (Infrastructure as Code) pour l'API SRE.
+# Un fichier identique est utilisé pour les deux environnements : Render crée un
+# « Blueprint instance » distinct par environnement (staging / production), chacun
+# avec sa base PostgreSQL et ses variables.
+#
+# Déploiement : le workflow GitHub Actions `Déploiement` appelle le Deploy Hook du
+# service, donc `autoDeploy` reste à false (sinon chaque push déploierait deux fois).
+
+services:
+  - type: web
+    name: sre-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter # passer à "free" pour un environnement de démonstration (mise en veille)
+    region: frankfurt
+    healthCheckPath: /sante
+    autoDeploy: false
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      # Migrations TypeORM exécutées au démarrage (idempotentes : elles sont suivies
+      # dans la table migrations_sre). Passer à "false" pour les appliquer à la main.
+      - key: DB_MIGRATIONS_RUN
+        value: "true"
+      - key: DB_SYNCHRONIZE
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sre-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 4h
+      - key: BCRYPT_ROUNDS
+        value: "12"
+      - key: FUSEAU_HORAIRE
+        value: Indian/Antananarivo
+      # Renseignés à la main dans le tableau de bord Render (secrets et URL).
+      - key: CORS_ORIGINS
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: DOCUMENT_ISSUER
+        sync: false
+      - key: RAPPELS_ACTIFS
+        sync: false
+      - key: MAIL_TRANSPORT
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_SECURE
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+
+databases:
+  - name: sre-db
+    plan: basic-256mb
+    region: frankfurt
+    postgresMajorVersion: "16"

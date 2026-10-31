@@ -95,7 +95,7 @@ export class AuthService {
       }
       if (role === AccountRole.CLIENT && data.profil) {
         const taxpayersRepository = manager.getRepository(TaxpayerEntity);
-        const nif = data.profil.nif?.trim().toUpperCase();
+        const nif = data.profil.nif.trim().toUpperCase();
         const stat = data.profil.stat?.trim().toUpperCase();
         if (nif && (await taxpayersRepository.exist({ where: { nif } }))) {
           throw new ConflictException("Ce NIF est déjà associé à un profil.");
@@ -130,7 +130,7 @@ export class AuthService {
           firstName: profile.prenom?.trim() || null,
           legalName: profile.raisonSociale?.trim() || null,
           tradeName: profile.nomCommercial?.trim() || null,
-          nif: profile.nif?.trim().toUpperCase() || null,
+          nif: profile.nif.trim().toUpperCase(),
           stat: profile.stat?.trim().toUpperCase() || null,
           address: profile.adresse.trim(),
           region: profile.region.trim(),

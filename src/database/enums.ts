@@ -26,10 +26,39 @@ export enum ObligationStatus {
 }
 
 export enum PaymentStatus {
+  /** Déclaration autonome déposée, en attente de la confirmation du paiement. */
+  PENDING = "EN_ATTENTE",
+  /** Déclaration historique soumise à l'examen administratif (compatibilité). */
   UNDER_REVIEW = "EN_VERIFICATION",
+  /** Paiement confirmé par le mécanisme de paiement : le reçu est généré automatiquement. */
   CONFIRMED = "CONFIRME",
   REJECTED = "REJETE",
   CORRECTION_REQUESTED = "CORRECTION_DEMANDEE",
+  /** Le mécanisme de paiement a signalé un échec. */
+  FAILED = "ECHEC",
+  /** Paiement annulé par le contribuable ou par le service avant confirmation. */
+  CANCELLED = "ANNULE",
+}
+
+/** Statuts pour lesquels un paiement est encore susceptible d'être confirmé. */
+export const PAYMENT_OPEN_STATUSES: PaymentStatus[] = [
+  PaymentStatus.PENDING,
+  PaymentStatus.UNDER_REVIEW,
+];
+
+/** Statuts qui n'autorisent ni confirmation ni génération de reçu. */
+export const PAYMENT_TERMINAL_NON_CONFIRMED_STATUSES: PaymentStatus[] = [
+  PaymentStatus.REJECTED,
+  PaymentStatus.CANCELLED,
+  PaymentStatus.FAILED,
+];
+
+/** Origine de la déclaration de paiement. */
+export enum PaymentOrigin {
+  /** Saisie par le contribuable lui-même : montant, impôt et période libres. */
+  AUTONOMOUS = "DECLARATION_AUTONOME",
+  /** Déclaration rattachée à une obligation fiscale créée par l'administration. */
+  OBLIGATION = "OBLIGATION",
 }
 
 export enum PaymentMethod {

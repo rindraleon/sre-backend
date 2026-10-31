@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -10,7 +9,13 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from "@nestjs/swagger";
 import { AccountRole, PaymentStatus } from "../database/enums";
 import { Roles } from "../common/decorators/roles.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
@@ -19,9 +24,10 @@ import { RolesGuard } from "../common/guards/roles.guard";
 import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
 import { CreatePaymentDto } from "./dto/create-payment.dto";
 import { PaymentDecisionDto } from "./dto/payment-decision.dto";
+import { parsePaymentFilters } from "./payment-filters";
 import { PaymentsService } from "./payments.service";
 
-@ApiTags("Déclarations de paiement")
+@ApiTags("Paiements")
 @ApiBearerAuth()
 @Controller("paiements")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -30,15 +36,15 @@ export class PaymentsController {
 
   @Post()
   @ApiOperation({
-    summary: "Soumettre une déclaration à l'examen administratif.",
-    description: "Le montant vient de l'obligation. La référence et les informations déclarées ne déclenchent aucun transfert et ne prouvent pas un règlement.",
+    summary: "Déclarer un paiement (nature d'impôt, montant et période saisis par l'utilisateur).",
+    description:
+      "Aucune obligation fiscale préalable n'est requise. `cleIdempotence` protège des doubles soumissions. La déclaration est validée automatiquement à la soumission : le paiement est créé au statut CONFIRME et le reçu officiel est généré immédiatement.",
   })
-  @ApiResponse({ status: 201, description: "Déclaration créée en attente d'examen; un accusé de soumission peut être téléchargé." })
-  @ApiResponse({ status: 400, description: "Données de déclaration invalides." })
-  @ApiResponse({ status: 403, description: "Un compte client lié au contribuable est requis." })
-  @ApiResponse({ status: 404, description: "Obligation absente ou inaccessible." })
-  @ApiResponse({ status: 409, description: "Une déclaration existe déjà ou l'obligation n'est pas éligible." })
-  @Roles(AccountRole.CLIENT)
+  @ApiResponse({ status: 201, description: "Paiement validé automatiquement, reçu officiel émis." })
+  @ApiResponse({ status: 400, description: "Données invalides (montant, période, canal)." })
+  @ApiResponse({ status: 403, description: "Contribuable hors périmètre ou non autorisé." })
+  @ApiResponse({ status: 409, description: "Référence de transaction déjà utilisée ou clé d'idempotence réutilisée." })
+  @Roles(AccountRole.CLIENT, AccountRole.ADMIN)
   createDeclaration(
     @CurrentUser() user: AuthenticatedUser,
     @Body() data: CreatePaymentDto,
@@ -47,50 +53,107 @@ export class PaymentsController {
   }
 
   @Get("miennes")
-  @ApiOperation({ summary: "Lister les déclarations du contribuable authentifié." })
-  @ApiResponse({ status: 200, description: "Déclarations du compte, avec leur historique et les documents disponibles." })
+  @ApiOperation({ summary: "Lister les paiements du contribuable authentifié." })
+  @ApiResponse({ status: 200, description: "Paiements du compte, avec historique et reçu éventuel." })
   @Roles(AccountRole.CLIENT)
   listMyPayments(@CurrentUser() user: AuthenticatedUser) {
     return this.payments.listMyPayments(user);
   }
 
+  @Get("a-suivre")
+  @ApiOperation({
+    summary: "Transactions nécessitant un suivi (en attente, en échec, annulées).",
+  })
+  @Roles(AccountRole.ADMIN)
+  listToFollowUp() {
+    return this.payments.listForAdministration({
+      statuses: [
+        PaymentStatus.PENDING,
+        PaymentStatus.UNDER_REVIEW,
+        PaymentStatus.FAILED,
+        PaymentStatus.REJECTED,
+      ],
+      page: 1,
+      perPage: 50,
+      sort: "date_desc",
+    });
+  }
+
   @Get()
-  @ApiOperation({ summary: "Lister les déclarations du périmètre Haute Matsiatra (administration)." })
-  @ApiQuery({ name: "statut", required: false, enum: PaymentStatus, description: "Filtre de statut métier." })
-  @ApiQuery({ name: "page", required: false, type: Number, example: 1 })
-  @ApiQuery({ name: "parPage", required: false, type: Number, example: 25, description: "Maximum 100 lignes par page." })
-  @ApiResponse({ status: 200, description: "Page de déclarations selon les filtres." })
-  @ApiResponse({ status: 400, description: "Filtre de statut invalide." })
+  @ApiOperation({
+    summary: "Rechercher et filtrer les paiements (administration).",
+    description:
+      "Filtres combinables : contribuable, nature d'impôt, période, dates, montants, statuts et recherche libre.",
+  })
+  @ApiQuery({ name: "statut", required: false, description: "Statut, ou liste séparée par des virgules." })
+  @ApiQuery({ name: "contribuableId", required: false })
+  @ApiQuery({ name: "typeImpotId", required: false })
+  @ApiQuery({ name: "periode", required: false, example: "2026-03" })
+  @ApiQuery({ name: "du", required: false, example: "2026-01-01" })
+  @ApiQuery({ name: "au", required: false, example: "2026-12-31" })
+  @ApiQuery({ name: "montantMin", required: false, type: Number })
+  @ApiQuery({ name: "montantMax", required: false, type: Number })
+  @ApiQuery({ name: "recherche", required: false, description: "Référence, NIF, STAT, nom, courriel." })
+  @ApiQuery({ name: "tri", required: false, enum: ["date_desc", "date_asc", "montant_desc", "montant_asc", "confirmation_desc"] })
+  @ApiQuery({ name: "page", required: false, type: Number })
+  @ApiQuery({ name: "parPage", required: false, type: Number, description: "Maximum 100." })
+  @ApiResponse({ status: 200, description: "Page de paiements filtrés." })
+  @ApiResponse({ status: 400, description: "Filtre invalide." })
   @Roles(AccountRole.ADMIN)
   listForAdministration(
-    @Query("statut") status?: string,
+    @Query("statut") statut?: string,
+    @Query("statuts") statuts?: string,
+    @Query("contribuableId") contribuableId?: string,
+    @Query("typeImpotId") typeImpotId?: string,
+    @Query("periode") periode?: string,
+    @Query("du") du?: string,
+    @Query("au") au?: string,
+    @Query("montantMin") montantMin?: string,
+    @Query("montantMax") montantMax?: string,
+    @Query("recherche") recherche?: string,
+    @Query("tri") tri?: string,
     @Query("page") page?: string,
-    @Query("parPage") perPage?: string,
+    @Query("parPage") parPage?: string,
   ) {
-    let statusFilter: PaymentStatus | undefined;
-    if (status) {
-      if (!Object.values(PaymentStatus).includes(status as PaymentStatus)) {
-        throw new BadRequestException("Filtre de statut invalide.");
-      }
-      statusFilter = status as PaymentStatus;
-    }
     return this.payments.listForAdministration(
-      statusFilter,
-      Number(page) || 1,
-      Number(perPage) || 25,
+      parsePaymentFilters({
+        statut,
+        statuts,
+        contribuableId,
+        typeImpotId,
+        periode,
+        du,
+        au,
+        montantMin,
+        montantMax,
+        recherche,
+        tri,
+        page,
+        parPage,
+      }),
     );
+  }
+
+  @Post(":id/annulation")
+  @ApiOperation({ summary: "Annuler un paiement en attente de confirmation." })
+  @ApiResponse({ status: 201, description: "Paiement annulé ; aucun reçu n'est émis." })
+  @ApiResponse({ status: 409, description: "Le paiement n'est plus annulable." })
+  @Roles(AccountRole.CLIENT, AccountRole.ADMIN)
+  cancel(
+    @Param("id", new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.payments.cancel(id, user);
   }
 
   @Patch(":id/decision")
   @ApiOperation({
-    summary: "Enregistrer une décision administrative sur une déclaration.",
-    description: "CONFIRME, REJETE ou CORRECTION_DEMANDEE. Un motif est requis pour le rejet et la demande de correction; CONFIRME crée un reçu interne, pas une preuve bancaire.",
+    summary: "Décision administrative : rapprochement (CONFIRME), rejet ou demande de correction.",
+    description:
+      "CONFIRME déclenche la génération automatique du reçu. Le rejet et la demande de correction exigent un motif et ne produisent aucun reçu.",
   })
-  @ApiResponse({ status: 200, description: "Décision et historique enregistrés; les documents reflètent le statut serveur." })
-  @ApiResponse({ status: 400, description: "Statut ou motif de décision invalide." })
-  @ApiResponse({ status: 403, description: "Action réservée à l'administration." })
-  @ApiResponse({ status: 404, description: "Déclaration introuvable dans le périmètre." })
-  @ApiResponse({ status: 409, description: "Une décision a déjà été enregistrée." })
+  @ApiResponse({ status: 200, description: "Décision enregistrée ; reçu généré si confirmation." })
+  @ApiResponse({ status: 409, description: "Paiement déjà clôturé." })
   @Roles(AccountRole.ADMIN)
   decide(
     @Param("id", new ParseUUIDPipe()) id: string,
@@ -101,9 +164,9 @@ export class PaymentsController {
   }
 
   @Get(":id")
-  @ApiOperation({ summary: "Consulter une déclaration accessible à l'utilisateur courant." })
-  @ApiResponse({ status: 200, description: "Déclaration, historique métier et documents associés." })
-  @ApiResponse({ status: 404, description: "Déclaration introuvable ou hors périmètre." })
+  @ApiOperation({ summary: "Consulter un paiement accessible à l'utilisateur courant." })
+  @ApiResponse({ status: 200, description: "Paiement, historique et reçu éventuel." })
+  @ApiResponse({ status: 404, description: "Paiement introuvable ou hors périmètre." })
   getOne(
     @Param("id", new ParseUUIDPipe()) id: string,
     @CurrentUser() user: AuthenticatedUser,

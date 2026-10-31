@@ -12,7 +12,11 @@ import { createValidationException } from "./common/validation/validation-errors
 import { addApiAuthorExtension, createOpenApiConfiguration, isOpenApiEnabled } from "./docs";
 
 async function bootstrap() {
-  const application = await NestFactory.create(AppModule, { bufferLogs: true });
+    // `rawBody` est requis pour vérifier la signature HMAC des confirmations de paiement.
+  const application = await NestFactory.create(AppModule, {
+    bufferLogs: true,
+    rawBody: true,
+  });
   const configuration = application.get(ConfigService);
   const port = Number(configuration.get<string>("PORT", "3000"));
   const origins = configuration
@@ -20,6 +24,25 @@ async function bootstrap() {
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
+  const isDevelopment =
+    configuration.get<string>("NODE_ENV", "development") !== "production";
+  const isAllowedOrigin = (origin?: string) => {
+    if (!origin) return true;
+    if (origins.includes(origin)) return true;
+    if (!isDevelopment) return false;
+    try {
+      const { hostname, protocol } = new URL(origin);
+      return (
+        (protocol === "http:" || protocol === "https:") &&
+        (hostname === "localhost" ||
+          hostname === "127.0.0.1" ||
+          hostname === "::1" ||
+          hostname.endsWith(".localhost"))
+      );
+    } catch {
+      return false;
+    }
+  };
 
   application.use(
     (_request: Request, response: Response, next: NextFunction) => {
@@ -43,11 +66,20 @@ async function bootstrap() {
     },
   );
   application.enableCors({
-    origin: origins,
+    origin: (
+      origin: string | undefined,
+      callback: (error: Error | null, allow?: boolean) => void,
+    ) => callback(null, isAllowedOrigin(origin)),
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: [
+      "Accept",
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+    ],
     exposedHeaders: ["X-Request-ID"],
     credentials: false,
+    maxAge: 600,
   });
   application.useGlobalPipes(
     new ValidationPipe({

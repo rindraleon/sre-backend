@@ -41,7 +41,6 @@ export class DocumentsController {
     const file = await this.documents.getPdf(id, user);
     return new StreamableFile(file.content, {
       type: "application/pdf",
-      disposition: `attachment; filename="${file.number}.pdf"`,
       length: file.content.length,
     });
   }

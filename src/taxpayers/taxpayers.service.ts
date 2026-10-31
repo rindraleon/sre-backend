@@ -97,6 +97,22 @@ export class TaxpayersService {
     }
 
     const changedFields: string[] = [];
+    if (!taxpayer.nif?.trim() && data.nif === undefined) {
+      throw new BadRequestException(
+        "Le NIF est obligatoire. Renseignez-le dans votre profil avant de continuer.",
+      );
+    }
+    if (data.nif !== undefined) {
+      const nextNif = data.nif.trim().toUpperCase();
+      const existingNif = await this.taxpayers.findOne({ where: { nif: nextNif } });
+      if (existingNif && existingNif.id !== taxpayer.id) {
+        throw new ConflictException("Ce NIF est déjà associé à un autre profil.");
+      }
+      if (nextNif !== taxpayer.nif) {
+        taxpayer.nif = nextNif;
+        changedFields.push("NIF");
+      }
+    }
     if (data.adresse !== undefined && data.adresse.trim() !== taxpayer.address) {
       taxpayer.address = data.adresse.trim();
       changedFields.push("Adresse");
@@ -126,7 +142,7 @@ export class TaxpayersService {
         user.name;
       const fingerprint = createHash("sha256")
         .update(
-          `${saved.address}|${saved.city}|${saved.phone}|${saved.tradeName ?? ""}`,
+          `${saved.nif}|${saved.address}|${saved.city}|${saved.phone}|${saved.tradeName ?? ""}`,
         )
         .digest("hex")
         .slice(0, 16);
@@ -211,14 +227,14 @@ export class TaxpayersService {
 
   async createForAdministration(data: CreateTaxpayerDto) {
     const email = data.courriel.trim().toLowerCase();
-    const nif = data.nif?.trim().toUpperCase() || null;
+    const nif = data.nif.trim().toUpperCase();
     const stat = data.stat?.trim().toUpperCase() || null;
     if (
       (await this.users.exist({ where: { email } })) ||
       (await this.taxpayers.exist({
         where: [
           { email },
-          ...(nif ? [{ nif }] : []),
+          { nif },
           ...(stat ? [{ stat }] : []),
         ],
       }))
@@ -319,7 +335,7 @@ export class TaxpayersService {
           const entry = rowTypes[index];
           const email = entry.email;
           const stat = entry.stat;
-          const nif = data.nif?.trim().toUpperCase() || null;
+          const nif = data.nif?.trim().toUpperCase() || "";
           const label =
             data.raisonSociale?.trim() || data.nom?.trim() || email;
           const errors: string[] = [];
@@ -327,6 +343,8 @@ export class TaxpayersService {
           // 1. Presence and validity of the required information.
           if (!isValidEmail(email))
             errors.push("Adresse e-mail absente ou invalide.");
+          if (nif.length < 3)
+            errors.push("NIF absent ou invalide.");
           if (data.type === TaxpayerType.BUSINESS) {
             if (!data.raisonSociale?.trim())
               errors.push("Raison sociale manquante.");
@@ -350,7 +368,7 @@ export class TaxpayersService {
             });
             continue;
           }
-          if (nif && nifs.has(nif)) {
+          if (nifs.has(nif)) {
             duplicates += 1;
             ignored += 1;
             report.push({
@@ -397,7 +415,7 @@ export class TaxpayersService {
           const savedProfile = await taxpayersRepository.save(profile);
           newProfiles.push(savedProfile);
           emails.add(email);
-          if (nif) nifs.add(nif);
+          nifs.add(nif);
           if (stat) stats.add(stat);
 
           if (entry.isBusinessWithAccount && stat && hashes[index]) {

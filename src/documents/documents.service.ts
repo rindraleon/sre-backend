@@ -1,59 +1,81 @@
 import {
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import PDFDocument from "pdfkit";
+import { createHmac } from "node:crypto";
 import { EntityManager, Repository } from "typeorm";
 import { InjectRepository } from "@nestjs/typeorm";
+import { genererPdfRecuFiscal } from "./recu-fiscal-pdf";
 import { PaymentDocumentEntity } from "../database/entities/payment-document.entity";
 import { PaymentEntity } from "../database/entities/payment.entity";
+import { TaxTypeEntity } from "../database/entities/tax-type.entity";
+import { TaxpayerEntity } from "../database/entities/taxpayer.entity";
 import { UserEntity } from "../database/entities/user.entity";
 import {
   AccountRole,
   DocumentStatus,
   PaymentDocumentType,
+  PaymentStatus,
 } from "../database/enums";
 import { SRE_REGION } from "../database/region";
 import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
 
+const RECEIPT_TYPE = PaymentDocumentType.PAYMENT_RECEIPT;
+
 @Injectable()
 export class DocumentsService {
+  private readonly logger = new Logger(DocumentsService.name);
+
   constructor(
     private readonly configuration: ConfigService,
     @InjectRepository(PaymentDocumentEntity)
     private readonly documents: Repository<PaymentDocumentEntity>,
   ) {}
 
-  async createAcknowledgment(manager: EntityManager, payment: PaymentEntity) {
-    return this.createDocument(
-      manager,
-      payment,
-      PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT,
-      null,
-    );
-  }
+  /**
+   * Reçu de paiement, émis dès la validation de la déclaration (validation
+   * automatique à la soumission).
+   * Idempotent : l'index unique (paiement, type) empêche tout second reçu définitif.
+   */
+  async ensureReceipt(manager: EntityManager, payment: PaymentEntity) {
+    if (payment.status !== PaymentStatus.CONFIRMED) {
+      // Garde-fou : aucun reçu définitif sur un paiement non confirmé.
+      return null;
+    }
+    const existing = await manager.getRepository(PaymentDocumentEntity).findOne({
+      where: { payment: { id: payment.id }, type: RECEIPT_TYPE },
+    });
+    if (existing) return existing;
 
-  async createInternalReceipt(
-    manager: EntityManager,
-    payment: PaymentEntity,
-    administrator: UserEntity,
-  ) {
-    return this.createDocument(
-      manager,
-      payment,
-      PaymentDocumentType.PAYMENT_RECEIPT,
-      administrator,
-    );
+    try {
+      return await this.createDocument(
+        manager,
+        payment,
+        RECEIPT_TYPE,
+        payment.validatedBy ?? null,
+      );
+    } catch (error) {
+      // Course entre deux confirmations concurrentes : l'index unique tranche.
+      const existingAfterRace = await manager
+        .getRepository(PaymentDocumentEntity)
+        .findOne({
+          where: { payment: { id: payment.id }, type: RECEIPT_TYPE },
+        });
+      if (existingAfterRace) return existingAfterRace;
+      throw error;
+    }
   }
 
   async listMyDocuments(taxpayerId: string) {
+    if (!taxpayerId) return [];
     const documents = await this.documents.find({
       where: { taxpayer: { id: taxpayerId, region: SRE_REGION } },
       relations: {
         taxpayer: true,
-        payment: { obligation: { taxType: true } },
+        payment: { taxType: true, obligation: { taxType: true } },
       },
       order: { issuedAt: "DESC" },
     });
@@ -66,10 +88,7 @@ export class DocumentsService {
     return this.toDocumentView(document, true);
   }
 
-  async getPdf(
-    id: string,
-    user: AuthenticatedUser,
-  ): Promise<{ number: string; content: Buffer }> {
+  async getPdf(id: string, user: AuthenticatedUser) {
     const document = await this.loadDocument(id);
     this.checkAccess(document, user);
     return {
@@ -78,11 +97,70 @@ export class DocumentsService {
     };
   }
 
+  /**
+   * Vérification publique d'un document à partir de son numéro et de son code :
+   * permet de contrôler l'authenticité d'un reçu imprimé sans exposer les données.
+   */
+  async verifyDocument(number: string, code: string) {
+    const document = await this.documents.findOne({
+      where: { number: number.trim().toUpperCase() },
+      relations: {
+        taxpayer: true,
+        payment: { taxType: true, obligation: { taxType: true } },
+      },
+    });
+    if (!document || document.status !== DocumentStatus.VALID) {
+      return { valide: false, motif: "Document inconnu ou annulé." };
+    }
+    const expected = this.verificationCode(document);
+    if (
+      !document.verificationCode ||
+      expected !== (code ?? "").trim().toUpperCase()
+    ) {
+      return { valide: false, motif: "Code de vérification incorrect." };
+    }
+    return {
+      valide: true,
+      numero: document.number,
+      type: document.type,
+      montant: Number(document.amount),
+      devise: document.currency,
+      emisLe: document.issuedAt,
+      emetteur: document.issuer,
+      referencePaiement: document.payment?.internalReference ?? null,
+      statutPaiement: document.payment?.status ?? null,
+      natureImpot:
+        document.payment?.taxType?.name ??
+        document.payment?.obligation?.taxType?.name ??
+        null,
+      periode:
+        document.payment?.fiscalPeriod ??
+        document.payment?.obligation?.period ??
+        null,
+      confirmeLe: document.payment?.confirmedAt ?? null,
+      contribuable:
+        document.taxpayer?.legalName ||
+        [document.taxpayer?.lastName, document.taxpayer?.firstName]
+          .filter(Boolean)
+          .join(" "),
+    };
+  }
+
+  /** URL publique de contrôle d'authenticité imprimée sur le document. */
+  private publicVerificationUrl(numero: string, code: string | null): string {
+    const base = this.configuration
+      .get<string>("API_PUBLIC_URL", "")
+      .trim()
+      .replace(/\/+$/, "");
+    const query = new URLSearchParams({ numero, code: code ?? "" }).toString();
+    return `${base ? base : ""}/documents/verifier?${query}`;
+  }
+
   private async loadDocument(id: string) {
     const document = await this.documents.findOne({
       where: { id },
       relations: {
-        payment: { obligation: { taxType: true } },
+        payment: { taxType: true, obligation: { taxType: true } },
         taxpayer: true,
         issuedBy: true,
       },
@@ -112,12 +190,73 @@ export class DocumentsService {
     }
   }
 
+  /** Code d'authentification du document (HMAC tronqué, non réversible). */
+  private verificationCode(document: PaymentDocumentEntity) {
+    const secret =
+      this.configuration.get<string>("RECEIPT_SECRET")?.trim() ||
+      this.configuration.get<string>("JWT_SECRET") ||
+      "sre-document-secret";
+    return createHmac("sha256", secret)
+      .update(
+        [
+          document.number,
+          document.amount,
+          document.currency,
+          document.payment?.id ?? "",
+        ].join("|"),
+      )
+      .digest("hex")
+      .slice(0, 16)
+      .toUpperCase();
+  }
+
+  private taxTypeName(payment: PaymentEntity) {
+    return (
+      payment.taxType?.name ??
+      payment.obligation?.taxType?.name ??
+      "Nature d'impôt non précisée"
+    );
+  }
+
+  private fiscalPeriod(payment: PaymentEntity) {
+    return payment.fiscalPeriod ?? payment.obligation?.period ?? "—";
+  }
+
+  private taxpayerName(payment: PaymentEntity) {
+    return (
+      payment.taxpayer?.legalName?.trim() ||
+      [payment.taxpayer?.firstName, payment.taxpayer?.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim() ||
+      "Contribuable"
+    );
+  }
+
   private async createDocument(
     manager: EntityManager,
     payment: PaymentEntity,
     type: PaymentDocumentType,
-    administrator: UserEntity | null,
+    issuerUser: UserEntity | null,
   ) {
+    // L'identité du contribuable doit figurer sur le document : la relation peut
+    // n'être transmise que par sa clé primaire, on la recharge dans ce cas.
+    const taxpayerId = payment.taxpayer?.id;
+    const taxpayerIncomplete =
+      !payment.taxpayer?.legalName?.trim() && !payment.taxpayer?.firstName?.trim();
+    if (taxpayerId && taxpayerIncomplete) {
+      const complete = await manager
+        .getRepository(TaxpayerEntity)
+        .findOne({ where: { id: taxpayerId } });
+      if (complete) payment.taxpayer = complete;
+    }
+    if (payment.taxType?.id && !payment.taxType.name) {
+      const complete = await manager
+        .getRepository(TaxTypeEntity)
+        .findOne({ where: { id: payment.taxType.id } });
+      if (complete) payment.taxType = complete;
+    }
+
     const issueDate = new Date();
     const year = issueDate.getFullYear();
     const suffix = payment.internalReference
@@ -129,47 +268,58 @@ export class DocumentsService {
     const number = `SRE-${prefix}-${year}-${suffix}`;
     const issuer = this.configuration.get<string>(
       "DOCUMENT_ISSUER",
-      "SRE · document interne",
+      "SRE · Service régional des entreprises",
     );
     const mention =
       type === PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT
         ? "Accusé de réception de la déclaration. Ce document confirme uniquement la soumission des informations déclarées par l'usager. Il ne confirme pas la réception de fonds ni le règlement d'un impôt."
-        : "Reçu interne SRE émis après une décision administrative de confirmation. Aucun prestataire bancaire ou mobile-money n'étant connecté, ce document ne constitue pas un reçu bancaire, une preuve de transfert ni une confirmation indépendante de réception de fonds.";
+        : "Reçu de paiement émis automatiquement dès la validation de la déclaration soumise sur le portail. Il atteste l'enregistrement du paiement et de son montant dans les systèmes du service ; il ne remplace pas le reçu ou le relevé émis par la banque ou l'opérateur mobile-money.";
 
     const snapshot: Record<string, unknown> = {
       titre:
         type === PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT
-          ? "Accusé de réception de déclaration"
-          : "Reçu interne SRE",
+          ? "Accusé de déclaration fiscale"
+          : "Reçu de versement fiscal",
       numero: number,
       type,
       emisLe: issueDate.toISOString(),
       emetteur: issuer,
       montant: payment.amount,
       devise: payment.currency,
+      statutPaiement: payment.status,
       contribuable: {
-        nom:
-          payment.taxpayer.legalName ||
-          [payment.taxpayer.firstName, payment.taxpayer.lastName]
-            .filter(Boolean)
-            .join(" "),
+        nom: this.taxpayerName(payment),
         nif: payment.taxpayer.nif,
+        stat: payment.taxpayer.stat,
+        type: payment.taxpayer.type,
         courriel: payment.taxpayer.email,
+        telephone: payment.taxpayer.phone ?? null,
+        adresse: payment.taxpayer.address,
+        ville: payment.taxpayer.city,
       },
-      obligation: {
-        referenceFiscale: payment.obligation.taxReference,
-        typeImpot: payment.obligation.taxType?.name ?? "Type d'impôt",
-        periode: payment.obligation.period,
+      impot: {
+        nature: this.taxTypeName(payment),
+        code: payment.taxType?.code ?? null,
+        periode: this.fiscalPeriod(payment),
+        debutPeriode: payment.periodStart,
+        finPeriode: payment.periodEnd,
       },
       paiement: {
         referenceInterne: payment.internalReference,
         referenceTransactionDeclaree: payment.transactionReference,
         dateTransactionDeclaree: payment.transactionDate,
         modeDeclare: payment.mode,
+        operateur: payment.operator,
+        canal: payment.bankOrChannel,
         statut: payment.status,
+        confirmeLe: payment.confirmedAt?.toISOString() ?? null,
+        fournisseur: payment.provider ?? null,
+        referenceFournisseur: payment.providerReference ?? null,
+        origine: payment.origin,
+        obligationReference: payment.obligation?.taxReference ?? null,
       },
       mention,
-      emettePar: administrator?.name ?? null,
+      emettePar: issuerUser?.name ?? "Système (génération automatique)",
     };
 
     const repository = manager.getRepository(PaymentDocumentEntity);
@@ -179,46 +329,63 @@ export class DocumentsService {
       status: DocumentStatus.VALID,
       payment,
       taxpayer: payment.taxpayer,
-      issuedBy: administrator,
+      issuedBy: issuerUser,
       amount: payment.amount,
       currency: payment.currency,
       issuer,
       mention,
       snapshot,
       issuedAt: issueDate,
+      verificationCode: null,
     });
+    document.verificationCode = this.verificationCode(document);
+    snapshot.codeVerification = document.verificationCode;
     return repository.save(document);
   }
 
   private toDocumentView(document: PaymentDocumentEntity, detail = false) {
-    const snapshot = document.snapshot;
-    const obligation = (snapshot.obligation ?? {}) as Record<string, unknown>;
-    const payment = (snapshot.paiement ?? {}) as Record<string, unknown>;
+    const snapshot = document.snapshot ?? {};
+    const impot = (snapshot.impot ?? {}) as Record<string, unknown>;
+    const legacyObligation = (snapshot.obligation ?? {}) as Record<string, unknown>;
+    const paiement = (snapshot.paiement ?? {}) as Record<string, unknown>;
+    const payment = document.payment;
     return {
       id: document.id,
       numero: document.number,
       type: document.type,
       statut: document.status,
-      paiementId: document.payment?.id,
-      referencePaiement: document.payment?.internalReference,
+      paiementId: payment?.id,
+      referencePaiement: payment?.internalReference,
       contribuableId: document.taxpayer?.id,
       montant: Number(document.amount),
       devise: document.currency,
       emetteur: document.issuer,
       mention: document.mention,
       emisLe: document.issuedAt,
+      codeVerification: document.verificationCode,
       typeImpotNom: String(
-        obligation.typeImpot ??
-          document.payment?.obligation?.taxType?.name ??
+        impot.nature ??
+          legacyObligation.typeImpot ??
+          payment?.taxType?.name ??
+          payment?.obligation?.taxType?.name ??
           "Type d'impôt",
       ),
       periode: String(
-        obligation.periode ?? document.payment?.obligation?.period ?? "—",
+        impot.periode ??
+          legacyObligation.periode ??
+          payment?.fiscalPeriod ??
+          payment?.obligation?.period ??
+          "—",
       ),
       referenceTransactionDeclaree: String(
-        payment.referenceTransactionDeclaree ?? "—",
+        paiement.referenceTransactionDeclaree ?? "—",
       ),
-      modeDeclare: String(payment.modeDeclare ?? "—"),
+      modeDeclare: String(paiement.modeDeclare ?? "—"),
+      statutPaiement: String(paiement.statut ?? payment?.status ?? "—"),
+      confirmeLe:
+        (paiement.confirmeLe as string | null | undefined) ??
+        payment?.confirmedAt ??
+        null,
       emisPar:
         typeof snapshot.emettePar === "string"
           ? snapshot.emettePar
@@ -229,115 +396,107 @@ export class DocumentsService {
   }
 
   private async generatePdf(document: PaymentDocumentEntity): Promise<Buffer> {
-    const snapshot = document.snapshot;
-    const taxpayer = (snapshot.contribuable ?? {}) as Record<
-      string,
-      unknown
-    >;
-    const obligation = (snapshot.obligation ?? {}) as Record<string, unknown>;
-    const payment = (snapshot.paiement ?? {}) as Record<string, unknown>;
-    const parts: Buffer[] = [];
-    return new Promise((resoudre, rejeter) => {
-      const pdf = new PDFDocument({
-        size: "A4",
-        margin: 52,
-        info: { Title: document.number, Author: document.issuer },
-      });
-      pdf.on("data", (part: Buffer) => parts.push(part));
-      pdf.on("end", () => resoudre(Buffer.concat(parts)));
-      pdf.on("error", rejeter);
+    const snapshot = document.snapshot ?? {};
+    const taxpayer = (snapshot.contribuable ?? {}) as Record<string, unknown>;
+    const impot = (snapshot.impot ?? {}) as Record<string, unknown>;
+    const legacyObligation = (snapshot.obligation ?? {}) as Record<string, unknown>;
+    const paiement = (snapshot.paiement ?? {}) as Record<string, unknown>;
+    const isReceipt = document.type === RECEIPT_TYPE;
+    const timezone = this.configuration.get<string>(
+      "FUSEAU_HORAIRE",
+      "Indian/Antananarivo",
+    );
+    const dbTaxpayer = document.taxpayer;
+    const dbPayment = document.payment;
+    const texte = (valeur: unknown): string | null => {
+      if (valeur === undefined || valeur === null) return null;
+      const propre = String(valeur).trim();
+      return propre.length > 0 ? propre : null;
+    };
 
-      pdf
-        .fillColor("#12243a")
-        .font("Helvetica-Bold")
-        .fontSize(10)
-        .text(document.issuer.toUpperCase());
-      pdf.moveDown(2);
-      const title =
-        document.type === PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT
-          ? "ACCUSÉ DE RÉCEPTION DE DÉCLARATION"
-          : "REÇU INTERNE SRE";
-      pdf.fontSize(19).text(title, { align: "left" });
-      pdf.moveDown(0.5);
-      pdf
-        .fillColor("#52627a")
-        .font("Helvetica")
-        .fontSize(10)
-        .text(`Document n° ${document.number}`);
-      pdf.text(
-        `Émis le ${new Date(document.issuedAt).toLocaleString("fr-FR", { timeZone: "Indian/Antananarivo" })} (heure d'Antananarivo)`,
-      );
-      pdf.moveDown(1.4);
-      pdf.strokeColor("#d8e0e9").moveTo(52, pdf.y).lineTo(543, pdf.y).stroke();
-      pdf.moveDown(1);
+    const nomContribuable =
+      texte(taxpayer.nom) ??
+      texte(dbTaxpayer?.legalName) ??
+      (texte(
+        [dbTaxpayer?.firstName, dbTaxpayer?.lastName].filter(Boolean).join(" "),
+      ) ||
+        "Contribuable");
 
-      pdf
-        .fillColor("#12243a")
-        .font("Helvetica-Bold")
-        .fontSize(12)
-        .text("Contribuable");
-      pdf.moveDown(0.4);
-      pdf
-        .font("Helvetica")
-        .fontSize(10)
-        .text(`Nom / raison sociale : ${String(taxpayer.nom ?? "—")}`);
-      pdf.text(`NIF : ${String(taxpayer.nif ?? "—")}`);
-      pdf.text(`Courriel : ${String(taxpayer.courriel ?? "—")}`);
-      pdf.moveDown(1);
-
-      pdf.font("Helvetica-Bold").fontSize(12).text("Déclaration associée");
-      pdf.moveDown(0.4);
-      pdf
-        .font("Helvetica")
-        .fontSize(10)
-        .text(
-          `Référence interne : ${document.payment?.internalReference ?? "—"}`,
-        );
-      pdf.text(
-        `Impôt / période : ${String(obligation.typeImpot ?? "—")} · ${String(obligation.periode ?? "—")}`,
-      );
-      pdf.text(
-        `Référence d'obligation : ${String(obligation.referenceFiscale ?? "—")}`,
-      );
-      pdf.text(
-        `Référence de transaction déclarée : ${String(payment.referenceTransactionDeclaree ?? "—")}`,
-      );
-      pdf.text(`Mode déclaré : ${String(payment.modeDeclare ?? "—")}`);
-      pdf.moveDown(1.2);
-
-      pdf
-        .fillColor("#12243a")
-        .font("Helvetica-Bold")
-        .fontSize(12)
-        .text("Montant déclaré");
-      pdf.moveDown(0.3);
-      pdf
-        .fontSize(19)
-        .text(
-          `${new Intl.NumberFormat("fr-FR").format(Number(document.amount))} ${document.currency}`,
-        );
-      pdf.moveDown(1.1);
-
-      const alert =
-        document.type === PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT
-          ? "ACCUSÉ DE SOUMISSION — PAS UNE PREUVE DE PAIEMENT"
-          : "REÇU INTERNE DE DÉCISION — PAS UNE PREUVE BANCAIRE";
-      pdf.fillColor("#9a4d0b").font("Helvetica-Bold").fontSize(10).text(alert);
-      pdf.moveDown(0.4);
-      pdf
-        .fillColor("#334155")
-        .font("Helvetica")
-        .fontSize(9)
-        .text(document.mention, { width: 490, lineGap: 3 });
-      pdf.moveDown(2);
-      pdf
-        .fillColor("#718096")
-        .fontSize(8)
-        .text(
-          "Document généré par le portail SRE. Aucun transfert de fonds n'est exécuté par cette API.",
-          { width: 490 },
-        );
-      pdf.end();
+    return genererPdfRecuFiscal({
+      estRecuDefinitif: isReceipt,
+      numero: document.number,
+      emetteur: document.issuer,
+      emisLe: document.issuedAt,
+      fuseauHoraire: timezone,
+      montant: Number(document.amount),
+      devise: document.currency,
+      statutPaiement: String(paiement.statut ?? dbPayment?.status ?? "—"),
+      codeVerification: document.verificationCode,
+      urlVerification: this.publicVerificationUrl(
+        document.number,
+        document.verificationCode,
+      ),
+      mention: document.mention,
+      contribuable: {
+        nom: nomContribuable,
+        nif: texte(taxpayer.nif) ?? texte(dbTaxpayer?.nif),
+        stat: texte(taxpayer.stat) ?? texte(dbTaxpayer?.stat),
+        adresse: texte(taxpayer.adresse) ?? texte(dbTaxpayer?.address),
+        ville: texte(taxpayer.ville) ?? texte(dbTaxpayer?.city),
+        telephone: texte(taxpayer.telephone) ?? texte(dbTaxpayer?.phone),
+        courriel: texte(taxpayer.courriel) ?? texte(dbTaxpayer?.email),
+      },
+      impot: {
+        nature:
+          texte(impot.nature) ??
+          texte(legacyObligation.typeImpot) ??
+          texte(dbPayment?.taxType?.name) ??
+          texte(dbPayment?.obligation?.taxType?.name) ??
+          "Nature d'impôt",
+        code:
+          texte(impot.code) ??
+          texte(dbPayment?.taxType?.code) ??
+          texte(dbPayment?.obligation?.taxType?.code),
+        periode:
+          texte(impot.periode) ??
+          texte(legacyObligation.periode) ??
+          texte(dbPayment?.fiscalPeriod) ??
+          texte(dbPayment?.obligation?.period) ??
+          "—",
+      },
+      paiement: {
+        referenceInterne:
+          texte(paiement.referenceInterne) ??
+          texte(dbPayment?.internalReference) ??
+          "—",
+        referenceTransactionDeclaree:
+          texte(paiement.referenceTransactionDeclaree) ??
+          texte(dbPayment?.transactionReference) ??
+          "—",
+        modeDeclare:
+          texte(paiement.modeDeclare) ?? texte(dbPayment?.mode) ?? "—",
+        operateur: texte(paiement.operateur) ?? texte(dbPayment?.operator),
+        canal: texte(paiement.canal) ?? texte(dbPayment?.bankOrChannel),
+        confirmeLe:
+          texte(paiement.confirmeLe) ??
+          (dbPayment?.confirmedAt ? dbPayment.confirmedAt.toISOString() : null),
+        dateTransactionDeclaree:
+          texte(paiement.dateTransactionDeclaree) ??
+          texte(dbPayment?.transactionDate),
+        obligationReference:
+          texte(paiement.obligationReference) ??
+          texte(dbPayment?.obligation?.taxReference),
+        origine: texte(paiement.origine) ?? texte(dbPayment?.origin),
+      },
     });
+  }
+
+  /** Utilitaire de diagnostic : nombre de documents émis pour un paiement. */
+  async countDocuments(paymentId: string) {
+    return this.documents.count({ where: { payment: { id: paymentId } } });
+  }
+
+  logMissingReceipt(paymentId: string) {
+    this.logger.error(`Reçu absent pour le paiement confirmé ${paymentId}.`);
   }
 }

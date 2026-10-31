@@ -19,7 +19,12 @@ import {
   type EmailSummaryRow,
   sanitizeErrorMessage,
 } from "./email-templates";
-import { isValidEmail, MAIL_SERVICE, type MailSender } from "./mail.service";
+import {
+  isValidEmail,
+  MAIL_SERVICE,
+  type MailSender,
+  type OutgoingEmailAttachment,
+} from "./mail.service";
 import { DEFAULT_TIMEZONE } from "./deadline-reminders.service";
 
 export interface ContactAckResult {
@@ -198,12 +203,15 @@ export class AcknowledgmentService {
     }
   }
 
-  /** Sends an automatic acknowledgment e-mail (and creates an in-app notification) when a connected client submits a. */
-  async sendPaymentDeclarationAcknowledgment(params: {
+  /**
+   * Sends the official receipt (e-mail with PDF attachment and in-app
+   * notification) as soon as a declaration has been automatically validated.
+   */
+  async sendPaymentReceiptIssued(params: {
     userId: string;
     paymentId: string;
     internalReference: string;
-    acknowledgmentNumber?: string | null;
+    receiptNumber: string;
     obligation?: ObligationEntity | null;
     taxReference: string;
     taxTypeName: string;
@@ -212,9 +220,10 @@ export class AcknowledgmentService {
     currency: string;
     mode: string;
     transactionReference: string;
-    submittedAt: Date;
+    validatedAt: Date;
     recipientName: string;
     recipientEmail: string;
+    attachment?: OutgoingEmailAttachment;
   }): Promise<void> {
     try {
       const user = await this.users.findOne({ where: { id: params.userId } });
@@ -230,49 +239,43 @@ export class AcknowledgmentService {
         obligation: params.obligation ?? null,
         recipientEmail: params.recipientEmail,
         recipientName: params.recipientName,
-        idempotencyKey: `CLIENT_ACK_PAYMENT:${params.paymentId}:${user.id}`,
-        reminderType: "ACCUSE_DECLARATION",
-        inAppTitle: `Accusé de réception — Déclaration ${params.internalReference}`,
-        inAppMessage: `Votre déclaration de paiement ${params.internalReference} (${params.taxTypeName} · ${params.period}, montant déclaré : ${formattedAmount}) a bien été enregistrée et placée en statut « En vérification ».`,
+        idempotencyKey: `CLIENT_RECEIPT:${params.paymentId}`,
+        reminderType: "RECU_PAIEMENT",
+        inAppTitle: `Reçu officiel émis — ${params.receiptNumber}`,
+        inAppMessage: `Votre déclaration ${params.internalReference} (${params.taxTypeName} · ${params.period}, montant : ${formattedAmount}) a été validée automatiquement. Votre reçu officiel ${params.receiptNumber} est disponible.`,
         link: relativePath,
-        emailSubject: `[Portail SRE · ${params.internalReference}] Accusé de réception de votre déclaration`,
-        emailTitle: "Accusé de réception de votre déclaration de paiement",
+        emailSubject: `[Portail SRE · ${params.internalReference}] Votre reçu officiel ${params.receiptNumber}`,
+        emailTitle: "Votre reçu officiel est disponible",
         confirmationIntro:
-          "Votre déclaration de paiement a bien été enregistrée sur le portail SRE et transmise à l'administration pour vérification.",
-        reference: params.internalReference,
-        actionSummary: "Soumission d'une déclaration de paiement à vérifier",
-        submittedAt: params.submittedAt,
+          "Votre déclaration de paiement a été validée automatiquement. Le reçu officiel correspondant est joint à cet e-mail.",
+        reference: params.receiptNumber,
+        actionSummary: "Validation automatique de la déclaration et émission du reçu",
+        submittedAt: params.validatedAt,
         summaryRows: [
-          ...(params.acknowledgmentNumber
-            ? [
-                {
-                  label: "Document d'accusé",
-                  value: params.acknowledgmentNumber,
-                },
-              ]
-            : []),
+          { label: "Numéro de reçu", value: params.receiptNumber },
           { label: "Impôt / Taxe", value: params.taxTypeName },
           { label: "Période fiscale", value: params.period },
           { label: "Référence d'obligation", value: params.taxReference },
-          { label: "Montant déclaré", value: formattedAmount },
+          { label: "Montant", value: formattedAmount },
           { label: "Mode de paiement déclaré", value: modeLabel },
           {
             label: "Référence de transaction",
             value: params.transactionReference,
           },
-          { label: "Statut du dossier", value: "En vérification" },
+          { label: "Statut du dossier", value: "Validée — reçu émis" },
         ],
         nextSteps: [
-          "Votre déclaration porte actuellement le statut « En vérification » et va être examinée par un administrateur.",
-          "Cet accusé confirme uniquement la bonne réception des informations déclarées ; il ne constitue pas une preuve bancaire de règlement.",
-          "Vous pouvez télécharger votre accusé de soumission PDF depuis votre espace contribuable et serez informé dès qu'une décision administrative sera enregistrée.",
+          "Votre déclaration a été validée automatiquement dès sa soumission ; aucune vérification administrative supplémentaire n'est nécessaire.",
+          `Le reçu officiel ${params.receiptNumber} est joint à cet e-mail au format PDF.`,
+          "Vous pouvez également le télécharger à tout moment depuis la rubrique « Mes reçus » de votre espace contribuable.",
         ],
         actionPath: relativePath,
-        actionLabel: "Suivre ma déclaration dans mon espace",
+        actionLabel: "Télécharger mon reçu dans mon espace",
+        attachments: params.attachment ? [params.attachment] : undefined,
       });
     } catch (error) {
       this.logger.warn(
-        `Erreur non bloquante lors de l'accusé de déclaration (${params.internalReference}) : ${sanitizeErrorMessage(error)}`,
+        `Erreur non bloquante lors de l'envoi du reçu (${params.receiptNumber}) : ${sanitizeErrorMessage(error)}`,
       );
     }
   }
@@ -490,6 +493,7 @@ export class AcknowledgmentService {
     nextSteps: string[];
     actionPath: string;
     actionLabel: string;
+    attachments?: OutgoingEmailAttachment[];
   }): Promise<void> {
     const transportConfigured = this.isTransportConfigured;
     let notification = await this.notifications.findOne({
@@ -568,6 +572,9 @@ export class AcknowledgmentService {
         subject: options.emailSubject,
         text,
         html,
+        ...(options.attachments?.length
+          ? { attachments: options.attachments }
+          : {}),
       });
       notification.emailStatus = NotificationEmailStatus.SENT;
       notification.emailSentAt = new Date();
