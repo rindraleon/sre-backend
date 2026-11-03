@@ -207,17 +207,18 @@ export function genererPdfRecuFiscal(donnees: RecuFiscalPdfDonnees): Promise<Buf
     }
     pdf.restore();
 
-    // Marque SRE | PLATEFORME FISCALE + organisme habilité
+    // Marque officielle de l'organisme émetteur
+    const libelleEmetteur = tronquer(donnees.emetteur, 72);
     pdf
       .fillColor(COULEURS.blanc)
       .font("Helvetica-Bold")
       .fontSize(11)
-      .text("SRE  |  PLATEFORME FISCALE", 95, 45, { lineBreak: false });
+      .text("SRE  •  HAUTE MATSIATRA", 95, 45, { lineBreak: false });
     pdf
       .fillColor(COULEURS.sousTitreClair)
       .font("Helvetica")
       .fontSize(8.5)
-      .text(tronquer(donnees.emetteur, 72), 95, 61, { lineBreak: false });
+      .text(libelleEmetteur, 95, 61, { lineBreak: false });
 
     // Grand titre + sous-titre
     pdf

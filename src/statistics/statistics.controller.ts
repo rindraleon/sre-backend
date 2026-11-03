@@ -94,11 +94,10 @@ export class StatisticsController {
 
     if (format === "pdf") {
       const file = await this.statistics.exportPdf(filters);
-      response.set({
-        "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="${file.filename}"`,
+      return new StreamableFile(file.content, {
+        type: "application/pdf",
+        length: file.content.length,
       });
-      return new StreamableFile(file.content);
     }
 
     const file = await this.statistics.exportCsv(filters);

@@ -43,6 +43,7 @@ import {
 } from "./payment-rules";
 import { PaymentProviderGuard } from "./payment-provider.guard";
 import { DocumentsService } from "../documents/documents.service";
+import { normalizeDocumentIssuer } from "../documents/document-issuer";
 import { AcknowledgmentService } from "../notifications/acknowledgment.service";
 import { type OutgoingEmailAttachment } from "../notifications/mail.service";
 import { AuthenticatedUser } from "../common/interfaces/authenticated-user.interface";
@@ -753,7 +754,7 @@ export class PaymentsService {
           referenceTransactionDeclaree: payment.transactionReference,
           modeDeclare: payment.mode,
           codeVerification: document.verificationCode,
-          emetteur: document.issuer,
+          emetteur: normalizeDocumentIssuer(document.issuer),
           mention: document.mention,
           emisPar: document.issuedBy?.name,
           lienPdf: `/documents/${document.id}/pdf`,

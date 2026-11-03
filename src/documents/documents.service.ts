@@ -9,6 +9,7 @@ import { createHmac } from "node:crypto";
 import { EntityManager, Repository } from "typeorm";
 import { InjectRepository } from "@nestjs/typeorm";
 import { genererPdfRecuFiscal } from "./recu-fiscal-pdf";
+import { normalizeDocumentIssuer } from "./document-issuer";
 import { PaymentDocumentEntity } from "../database/entities/payment-document.entity";
 import { PaymentEntity } from "../database/entities/payment.entity";
 import { TaxTypeEntity } from "../database/entities/tax-type.entity";
@@ -109,7 +110,7 @@ export class DocumentsService {
         payment: { taxType: true, obligation: { taxType: true } },
       },
     });
-    if (!document || document.status !== DocumentStatus.VALID) {
+    if (document?.status !== DocumentStatus.VALID) {
       return { valide: false, motif: "Document inconnu ou annulé." };
     }
     const expected = this.verificationCode(document);
@@ -126,7 +127,7 @@ export class DocumentsService {
       montant: Number(document.amount),
       devise: document.currency,
       emisLe: document.issuedAt,
-      emetteur: document.issuer,
+      emetteur: normalizeDocumentIssuer(document.issuer),
       referencePaiement: document.payment?.internalReference ?? null,
       statutPaiement: document.payment?.status ?? null,
       natureImpot:
@@ -148,12 +149,12 @@ export class DocumentsService {
 
   /** URL publique de contrôle d'authenticité imprimée sur le document. */
   private publicVerificationUrl(numero: string, code: string | null): string {
-    const base = this.configuration
-      .get<string>("API_PUBLIC_URL", "")
-      .trim()
-      .replace(/\/+$/, "");
+    let base = this.configuration.get<string>("API_PUBLIC_URL", "").trim();
+    while (base.endsWith("/")) {
+      base = base.slice(0, -1);
+    }
     const query = new URLSearchParams({ numero, code: code ?? "" }).toString();
-    return `${base ? base : ""}/documents/verifier?${query}`;
+    return `${base || ""}/documents/verifier?${query}`;
   }
 
   private async loadDocument(id: string) {
@@ -266,9 +267,8 @@ export class DocumentsService {
     const prefix =
       type === PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT ? "ACC" : "REC";
     const number = `SRE-${prefix}-${year}-${suffix}`;
-    const issuer = this.configuration.get<string>(
-      "DOCUMENT_ISSUER",
-      "SRE · Service régional des entreprises",
+    const issuer = normalizeDocumentIssuer(
+      this.configuration.get<string>("DOCUMENT_ISSUER"),
     );
     const mention =
       type === PaymentDocumentType.DECLARATION_ACKNOWLEDGMENT
@@ -349,6 +349,16 @@ export class DocumentsService {
     const legacyObligation = (snapshot.obligation ?? {}) as Record<string, unknown>;
     const paiement = (snapshot.paiement ?? {}) as Record<string, unknown>;
     const payment = document.payment;
+    const asText = (value: unknown, fallback: string): string => {
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed.length > 0 ? trimmed : fallback;
+      }
+      if (typeof value === "number" || typeof value === "boolean") {
+        return String(value);
+      }
+      return fallback;
+    };
     return {
       id: document.id,
       numero: document.number,
@@ -359,29 +369,30 @@ export class DocumentsService {
       contribuableId: document.taxpayer?.id,
       montant: Number(document.amount),
       devise: document.currency,
-      emetteur: document.issuer,
+      emetteur: normalizeDocumentIssuer(document.issuer),
       mention: document.mention,
       emisLe: document.issuedAt,
       codeVerification: document.verificationCode,
-      typeImpotNom: String(
+      typeImpotNom: asText(
         impot.nature ??
           legacyObligation.typeImpot ??
           payment?.taxType?.name ??
-          payment?.obligation?.taxType?.name ??
-          "Type d'impôt",
+          payment?.obligation?.taxType?.name,
+        "Type d'impôt",
       ),
-      periode: String(
+      periode: asText(
         impot.periode ??
           legacyObligation.periode ??
           payment?.fiscalPeriod ??
-          payment?.obligation?.period ??
-          "—",
+          payment?.obligation?.period,
+        "—",
       ),
-      referenceTransactionDeclaree: String(
-        paiement.referenceTransactionDeclaree ?? "—",
+      referenceTransactionDeclaree: asText(
+        paiement.referenceTransactionDeclaree,
+        "—",
       ),
-      modeDeclare: String(paiement.modeDeclare ?? "—"),
-      statutPaiement: String(paiement.statut ?? payment?.status ?? "—"),
+      modeDeclare: asText(paiement.modeDeclare, "—"),
+      statutPaiement: asText(paiement.statut ?? payment?.status, "—"),
       confirmeLe:
         (paiement.confirmeLe as string | null | undefined) ??
         payment?.confirmedAt ??
@@ -410,9 +421,19 @@ export class DocumentsService {
     const dbPayment = document.payment;
     const texte = (valeur: unknown): string | null => {
       if (valeur === undefined || valeur === null) return null;
-      const propre = String(valeur).trim();
-      return propre.length > 0 ? propre : null;
+      if (
+        typeof valeur === "string" ||
+        typeof valeur === "number" ||
+        typeof valeur === "boolean"
+      ) {
+        const propre = String(valeur).trim();
+        return propre.length > 0 ? propre : null;
+      }
+      return null;
     };
+
+    const statutPaiement =
+      texte(paiement.statut) ?? texte(dbPayment?.status) ?? "—";
 
     const nomContribuable =
       texte(taxpayer.nom) ??
@@ -425,12 +446,12 @@ export class DocumentsService {
     return genererPdfRecuFiscal({
       estRecuDefinitif: isReceipt,
       numero: document.number,
-      emetteur: document.issuer,
+      emetteur: normalizeDocumentIssuer(document.issuer),
       emisLe: document.issuedAt,
       fuseauHoraire: timezone,
       montant: Number(document.amount),
       devise: document.currency,
-      statutPaiement: String(paiement.statut ?? dbPayment?.status ?? "—"),
+      statutPaiement,
       codeVerification: document.verificationCode,
       urlVerification: this.publicVerificationUrl(
         document.number,
