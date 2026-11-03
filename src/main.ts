@@ -19,25 +19,39 @@ async function bootstrap() {
   });
   const configuration = application.get(ConfigService);
   const port = Number(configuration.get<string>("PORT", "3000"));
-  const origins = configuration
-    .get<string>("CORS_ORIGINS", "http://localhost:5173")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const normalizeOrigin = (origin: string) => origin.trim().replace(/\/+$/, "");
+  const defaultOrigins = [
+    "http://localhost:5173",
+    "http://localhost:4173",
+    "https://sre-paiement.vercel.app",
+  ];
+  const origins = new Set(
+    [
+      ...defaultOrigins,
+      ...configuration.get<string>("CORS_ORIGINS", "").split(","),
+      ...configuration.get<string>("APP_URL", "").split(","),
+    ]
+      .map(normalizeOrigin)
+      .filter(Boolean),
+  );
   const isDevelopment =
     configuration.get<string>("NODE_ENV", "development") !== "production";
+  const isVercelFrontend = (hostname: string) =>
+    hostname === "sre-paiement.vercel.app" ||
+    (hostname.startsWith("sre-paiement-") && hostname.endsWith(".vercel.app"));
   const isAllowedOrigin = (origin?: string) => {
     if (!origin) return true;
-    if (origins.includes(origin)) return true;
-    if (!isDevelopment) return false;
     try {
       const { hostname, protocol } = new URL(origin);
+      if (origins.has(normalizeOrigin(origin))) return true;
+      if (!isDevelopment) return protocol === "https:" && isVercelFrontend(hostname);
       return (
         (protocol === "http:" || protocol === "https:") &&
         (hostname === "localhost" ||
           hostname === "127.0.0.1" ||
           hostname === "::1" ||
-          hostname.endsWith(".localhost"))
+          hostname.endsWith(".localhost") ||
+          isVercelFrontend(hostname))
       );
     } catch {
       return false;
